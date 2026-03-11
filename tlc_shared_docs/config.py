@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -11,6 +12,7 @@ from typing import List, Optional
 
 SHARED_DIR = Path("docs") / "source" / "shared"
 CONFIG_FILE = "shared.json"
+CENTRAL_CONFIG_DIR = ".configs"
 
 # .gitignore content for the shared directory:
 # ignore everything except the config and .gitignore itself
@@ -40,6 +42,7 @@ class SharedFile:
 class SharedConfig:
     source_repo: SourceRepo
     shared_files: List[SharedFile] = field(default_factory=list)
+    mode: str = "local"  # "local" or "central"
 
 
 _GLOB_CHARS = set("*?[")
@@ -108,6 +111,68 @@ def resolve_local_path(project_root: Path, local_path_str: str) -> Path:
     return shared_dir_path(project_root) / local_path_str
 
 
+def extract_org_repo(url: str) -> str:
+    """Extract ``org/repo`` from a Git URL (HTTPS or SSH).
+
+    Handles:
+    - ``https://github.com/org/repo.git``
+    - ``https://github.com/org/repo``
+    - ``git@github.com:org/repo.git``
+    - ``ssh://git@github.com/org/repo.git``
+    """
+    # Strip trailing .git
+    url = url.rstrip("/")
+    if url.endswith(".git"):
+        url = url[:-4]
+
+    # SSH shorthand: git@host:org/repo
+    m = re.match(r"^[\w.-]+@[\w.-]+:(.*)", url)
+    if m:
+        return m.group(1)
+
+    # HTTPS / SSH-URL: extract last two path segments
+    m = re.search(r"/([\w._-]+/[\w._-]+)$", url)
+    if m:
+        return m.group(1)
+
+    raise ValueError(f"Cannot extract org/repo from URL: {url}")
+
+
+def detect_repo_identity(project_root: Path) -> str:
+    """Detect the current repo's ``org/repo`` from its git remote origin."""
+    try:
+        from git import Repo, InvalidGitRepositoryError
+        repo = Repo(project_root)
+        origin_url = repo.remotes.origin.url
+        return extract_org_repo(origin_url)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Cannot detect repo identity from {project_root}: {exc}"
+        ) from exc
+
+
+def central_config_path(org_repo: str) -> str:
+    """Return the path inside the source repo where the central config lives.
+
+    Example: ``org/repo`` -> ``.configs/org/repo.json``
+    """
+    return f"{CENTRAL_CONFIG_DIR}/{org_repo}.json"
+
+
+def parse_shared_files(data: dict) -> List[SharedFile]:
+    """Parse the shared_files list from a config dict."""
+    shared_files: List[SharedFile] = []
+    for entry in data.get("shared_files", []):
+        shared_files.append(
+            SharedFile(
+                remote_path=entry["remote_path"],
+                local_path=entry["local_path"],
+                action=entry.get("action", "get"),
+            )
+        )
+    return shared_files
+
+
 def load_config(project_root: Path) -> SharedConfig:
     """Read and parse shared.json."""
     cfg_path = config_path(project_root)
@@ -122,14 +187,11 @@ def load_config(project_root: Path) -> SharedConfig:
         branch=repo_data.get("branch", "main"),
     )
 
-    shared_files: List[SharedFile] = []
-    for entry in data.get("shared_files", []):
-        shared_files.append(
-            SharedFile(
-                remote_path=entry["remote_path"],
-                local_path=entry["local_path"],
-                action=entry.get("action", "get"),
-            )
-        )
+    mode = data.get("mode", "local")
+    shared_files = parse_shared_files(data)
 
-    return SharedConfig(source_repo=source_repo, shared_files=shared_files)
+    return SharedConfig(
+        source_repo=source_repo,
+        shared_files=shared_files,
+        mode=mode,
+    )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path, PurePosixPath
@@ -9,6 +10,59 @@ from typing import List, Optional
 
 from . import config as cfg
 from . import git_ops
+
+
+def _resolve_config(
+    root: Path,
+    conf: cfg.SharedConfig,
+    central_url: Optional[str] = None,
+) -> tuple[cfg.SharedConfig, List[str]]:
+    """If *conf* is in central mode, fetch the config from the source repo.
+
+    Returns ``(resolved_config, messages)``.
+    """
+    messages: List[str] = []
+
+    # CLI --central overrides mode
+    source_url = central_url or (conf.source_repo.url if conf.mode == "central" else None)
+    if not source_url:
+        return conf, messages
+
+    # Detect this repo's org/repo
+    org_repo = cfg.detect_repo_identity(root)
+    config_path = cfg.central_config_path(org_repo)
+
+    # Use source_repo settings, but allow CLI override of URL
+    source = cfg.SourceRepo(
+        url=source_url,
+        branch=conf.source_repo.branch if conf.source_repo.url == source_url else "main",
+    )
+    if central_url:
+        source = cfg.SourceRepo(url=central_url, branch=conf.source_repo.branch)
+
+    messages.append(f"Central mode: looking up {config_path} from {source.url}")
+
+    content = git_ops.fetch_single_file(source.url, source.branch, config_path)
+    if content is None:
+        raise FileNotFoundError(
+            f"Central config not found: {config_path} in {source.url} ({source.branch})"
+        )
+
+    central_data = json.loads(content.decode("utf-8"))
+    central_files = cfg.parse_shared_files(central_data)
+
+    # Warn if local config also had shared_files
+    if conf.shared_files:
+        messages.append(
+            "WARNING: Local shared.json contains shared_files entries, "
+            "but central mode is active. Central config takes precedence."
+        )
+
+    return cfg.SharedConfig(
+        source_repo=source,
+        shared_files=central_files,
+        mode="central",
+    ), messages
 
 
 def _expand_get_entries(
@@ -68,6 +122,7 @@ def _expand_get_entries(
 def get_files(
     project_root: Optional[Path] = None,
     dry_run: bool = False,
+    central_url: Optional[str] = None,
 ) -> List[str]:
     """Pull shared files from the remote repo.
 
@@ -76,8 +131,11 @@ def get_files(
     root = project_root or cfg.find_project_root()
     cfg.ensure_shared_dir(root)
     conf = cfg.load_config(root)
+    conf, resolve_msgs = _resolve_config(root, conf, central_url)
+    messages: List[str] = list(resolve_msgs)
 
-    files_to_get, messages = _expand_get_entries(conf)
+    files_to_get, expand_msgs = _expand_get_entries(conf)
+    messages.extend(expand_msgs)
     if not files_to_get:
         if not messages:
             messages.append("No files with action=get found in shared.json")
@@ -118,6 +176,7 @@ def push_files(
     project_root: Optional[Path] = None,
     dry_run: bool = False,
     force: bool = False,
+    central_url: Optional[str] = None,
 ) -> List[str]:
     """Push local shared files to the remote repo.
 
@@ -125,17 +184,20 @@ def push_files(
     """
     root = project_root or cfg.find_project_root()
     conf = cfg.load_config(root)
+    conf, resolve_msgs = _resolve_config(root, conf, central_url)
+    messages: List[str] = list(resolve_msgs)
 
     files_to_push = [f for f in conf.shared_files if f.action == "push"]
     if not files_to_push:
-        return ["No files with action=push found in shared.json"]
+        messages.append("No files with action=push found in shared.json")
+        return messages
 
     if dry_run:
-        return [f"[dry-run] Would push: {f.local_path} -> {f.remote_path}" for f in files_to_push]
+        messages.extend(f"[dry-run] Would push: {f.local_path} -> {f.remote_path}" for f in files_to_push)
+        return messages
 
     # Build the file map: remote_path -> bytes
     file_map: dict[str, bytes] = {}
-    messages: List[str] = []
 
     for sf in files_to_push:
         local = cfg.resolve_local_path(root, sf.local_path)

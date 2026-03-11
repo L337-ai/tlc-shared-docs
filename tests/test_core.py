@@ -8,7 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tlc_shared_docs.core import get_files, push_files
+from tlc_shared_docs.core import _resolve_config, get_files, push_files
+from tlc_shared_docs.config import SharedConfig, SharedFile, SourceRepo
 
 
 class TestGetFilesDryRun:
@@ -247,3 +248,137 @@ class TestCLI:
         with pytest.raises(SystemExit) as exc_info:
             main(["--version"])
         assert exc_info.value.code == 0
+
+
+class TestResolveConfigCentral:
+    """Tests for central mode config resolution."""
+
+    def _make_conf(self, mode="central", url="https://example.com/shared.git", shared_files=None):
+        return SharedConfig(
+            source_repo=SourceRepo(url=url, branch="main"),
+            shared_files=shared_files or [],
+            mode=mode,
+        )
+
+    @patch("tlc_shared_docs.core.cfg.detect_repo_identity", return_value="myorg/myapp")
+    @patch("tlc_shared_docs.core.git_ops.fetch_single_file")
+    def test_central_fetches_config(self, mock_fetch, mock_detect, tmp_path):
+        central_data = {
+            "shared_files": [
+                {"remote_path": "docs/intro.md", "local_path": "intro.md", "action": "get"}
+            ]
+        }
+        mock_fetch.return_value = json.dumps(central_data).encode()
+
+        conf = self._make_conf()
+        resolved, msgs = _resolve_config(tmp_path, conf)
+
+        mock_fetch.assert_called_once_with(
+            "https://example.com/shared.git", "main", ".configs/myorg/myapp.json"
+        )
+        assert resolved.mode == "central"
+        assert len(resolved.shared_files) == 1
+        assert resolved.shared_files[0].remote_path == "docs/intro.md"
+        assert any("Central mode" in m for m in msgs)
+
+    @patch("tlc_shared_docs.core.cfg.detect_repo_identity", return_value="myorg/myapp")
+    @patch("tlc_shared_docs.core.git_ops.fetch_single_file")
+    def test_central_warns_local_files_ignored(self, mock_fetch, mock_detect, tmp_path):
+        """When local shared.json has shared_files AND mode=central, warn."""
+        central_data = {
+            "shared_files": [
+                {"remote_path": "a.md", "local_path": "a.md", "action": "get"}
+            ]
+        }
+        mock_fetch.return_value = json.dumps(central_data).encode()
+
+        conf = self._make_conf(shared_files=[
+            SharedFile(remote_path="local.md", local_path="local.md", action="get")
+        ])
+        resolved, msgs = _resolve_config(tmp_path, conf)
+
+        assert any("WARNING" in m and "Central config takes precedence" in m for m in msgs)
+        # Central files win, local files are not in the result
+        assert len(resolved.shared_files) == 1
+        assert resolved.shared_files[0].remote_path == "a.md"
+
+    @patch("tlc_shared_docs.core.cfg.detect_repo_identity", return_value="myorg/myapp")
+    @patch("tlc_shared_docs.core.git_ops.fetch_single_file")
+    def test_central_config_not_found_raises(self, mock_fetch, mock_detect, tmp_path):
+        mock_fetch.return_value = None
+
+        conf = self._make_conf()
+        with pytest.raises(FileNotFoundError, match="Central config not found"):
+            _resolve_config(tmp_path, conf)
+
+    def test_local_mode_skips_central(self, tmp_path):
+        """Local mode should pass through unchanged."""
+        conf = self._make_conf(mode="local")
+        resolved, msgs = _resolve_config(tmp_path, conf)
+        assert resolved is conf
+        assert msgs == []
+
+    @patch("tlc_shared_docs.core.cfg.detect_repo_identity", return_value="myorg/myapp")
+    @patch("tlc_shared_docs.core.git_ops.fetch_single_file")
+    def test_cli_central_url_overrides_mode(self, mock_fetch, mock_detect, tmp_path):
+        """--central CLI flag should activate central mode even if mode=local."""
+        central_data = {
+            "shared_files": [
+                {"remote_path": "x.md", "local_path": "x.md", "action": "get"}
+            ]
+        }
+        mock_fetch.return_value = json.dumps(central_data).encode()
+
+        conf = self._make_conf(mode="local")
+        resolved, msgs = _resolve_config(
+            tmp_path, conf, central_url="https://override.com/docs.git"
+        )
+
+        mock_fetch.assert_called_once_with(
+            "https://override.com/docs.git", "main", ".configs/myorg/myapp.json"
+        )
+        assert resolved.mode == "central"
+
+    @patch("tlc_shared_docs.core.cfg.detect_repo_identity", return_value="myorg/myapp")
+    @patch("tlc_shared_docs.core.git_ops.fetch_single_file")
+    def test_central_get_dry_run(self, mock_fetch, mock_detect, fake_project):
+        """Central mode + get --dry-run should show the resolved files."""
+        root, shared_dir = fake_project
+        config = {
+            "mode": "central",
+            "source_repo": {"url": "https://example.com/shared.git", "branch": "main"},
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        central_data = {
+            "shared_files": [
+                {"remote_path": "guide.md", "local_path": "guide.md", "action": "get"}
+            ]
+        }
+        mock_fetch.return_value = json.dumps(central_data).encode()
+
+        messages = get_files(project_root=root, dry_run=True)
+        assert any("[dry-run]" in m for m in messages)
+        assert any("guide.md" in m for m in messages)
+
+    @patch("tlc_shared_docs.core.cfg.detect_repo_identity", return_value="myorg/myapp")
+    @patch("tlc_shared_docs.core.git_ops.fetch_single_file")
+    def test_central_push_dry_run(self, mock_fetch, mock_detect, fake_project):
+        """Central mode + push --dry-run should show the resolved files."""
+        root, shared_dir = fake_project
+        config = {
+            "mode": "central",
+            "source_repo": {"url": "https://example.com/shared.git", "branch": "main"},
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        central_data = {
+            "shared_files": [
+                {"remote_path": "guide.md", "local_path": "guide.md", "action": "push"}
+            ]
+        }
+        mock_fetch.return_value = json.dumps(central_data).encode()
+
+        messages = push_files(project_root=root, dry_run=True)
+        assert any("[dry-run]" in m for m in messages)
+        assert any("guide.md" in m for m in messages)

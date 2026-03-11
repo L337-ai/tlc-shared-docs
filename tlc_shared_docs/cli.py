@@ -27,6 +27,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show what would be done without making changes",
     )
+    get_parser.add_argument(
+        "--central",
+        metavar="URL",
+        default=None,
+        help="Use central control mode: fetch config from this repo URL",
+    )
 
     # --- push ---
     push_parser = sub.add_parser("push", help="Push local shared files to the remote repo")
@@ -39,6 +45,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Force-push even if remote files have changed",
+    )
+    push_parser.add_argument(
+        "--central",
+        metavar="URL",
+        default=None,
+        help="Use central control mode: fetch config from this repo URL",
     )
 
     return parser
@@ -54,9 +66,9 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         if args.command == "get":
-            messages = get_files(dry_run=args.dry_run)
+            messages = get_files(dry_run=args.dry_run, central_url=args.central)
         elif args.command == "push":
-            messages = push_files(dry_run=args.dry_run, force=args.force)
+            messages = push_files(dry_run=args.dry_run, force=args.force, central_url=args.central)
         else:
             parser.print_help()
             sys.exit(1)

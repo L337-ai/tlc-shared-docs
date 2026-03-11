@@ -11,7 +11,9 @@ from tlc_shared_docs.config import (
     GITIGNORE_CONTENT,
     SharedFile,
     SourceRepo,
+    central_config_path,
     ensure_shared_dir,
+    extract_org_repo,
     find_project_root,
     glob_prefix,
     is_glob,
@@ -124,3 +126,56 @@ class TestGlobPrefix:
 
     def test_plain_path(self):
         assert glob_prefix("docs/source/file.md") == "docs/source/file.md"
+
+
+class TestExtractOrgRepo:
+    def test_https_with_git_suffix(self):
+        assert extract_org_repo("https://github.com/L337-ai/tlc-shared-docs.git") == "L337-ai/tlc-shared-docs"
+
+    def test_https_without_git_suffix(self):
+        assert extract_org_repo("https://github.com/L337-ai/tlc-shared-docs") == "L337-ai/tlc-shared-docs"
+
+    def test_https_trailing_slash(self):
+        assert extract_org_repo("https://github.com/L337-ai/tlc-shared-docs/") == "L337-ai/tlc-shared-docs"
+
+    def test_ssh_shorthand(self):
+        assert extract_org_repo("git@github.com:L337-ai/tlc-shared-docs.git") == "L337-ai/tlc-shared-docs"
+
+    def test_ssh_shorthand_no_suffix(self):
+        assert extract_org_repo("git@github.com:org/repo") == "org/repo"
+
+    def test_ssh_url(self):
+        assert extract_org_repo("ssh://git@github.com/org/repo.git") == "org/repo"
+
+    def test_dots_and_underscores(self):
+        assert extract_org_repo("https://github.com/my.org/my_repo.git") == "my.org/my_repo"
+
+    def test_invalid_url_raises(self):
+        with pytest.raises(ValueError, match="Cannot extract"):
+            extract_org_repo("not-a-url")
+
+
+class TestCentralConfigPath:
+    def test_basic(self):
+        assert central_config_path("L337-ai/my-app") == ".configs/L337-ai/my-app.json"
+
+    def test_nested_org(self):
+        assert central_config_path("org/repo") == ".configs/org/repo.json"
+
+
+class TestLoadConfigCentralMode:
+    def test_loads_central_mode(self, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "mode": "central",
+            "source_repo": {"url": "https://example.com/shared-docs.git", "branch": "main"},
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+        conf = load_config(root)
+        assert conf.mode == "central"
+        assert conf.shared_files == []
+
+    def test_defaults_mode_to_local(self, configured_project):
+        root, _ = configured_project
+        conf = load_config(root)
+        assert conf.mode == "local"

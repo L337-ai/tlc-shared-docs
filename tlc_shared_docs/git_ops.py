@@ -156,6 +156,24 @@ def check_remote_unchanged(
         shutil.rmtree(clone_dir, ignore_errors=True)
 
 
+def fetch_single_file(url: str, branch: str, file_path: str) -> bytes | None:
+    """Fetch a single file from a remote repo via sparse checkout.
+
+    Returns the file contents, or ``None`` if the file does not exist.
+    """
+    clone_dir = _tmp_clone_dir()
+    try:
+        clone_dir, _repo = sparse_checkout_files(url, branch, [file_path])
+        target = clone_dir / file_path
+        if not target.exists():
+            return None
+        return target.read_bytes()
+    except GitError:
+        raise
+    finally:
+        shutil.rmtree(clone_dir, ignore_errors=True)
+
+
 def cleanup(clone_dir: Path) -> None:
     """Remove a temporary clone directory."""
     shutil.rmtree(clone_dir, ignore_errors=True)
