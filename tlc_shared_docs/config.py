@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
+
+logger = logging.getLogger(__name__)
 
 SHARED_DIR = Path("docs") / "source" / "shared"
 CONFIG_FILE = "shared.json"
@@ -60,6 +63,7 @@ def glob_prefix(pattern: str) -> str:
     For ``stories/**/*.md`` this returns ``stories``.
     For ``*.md`` this returns an empty string.
     """
+    # Split on forward slashes and collect segments until we hit a glob char
     parts = pattern.replace("\\", "/").split("/")
     prefix_parts = []
     for p in parts:
@@ -82,11 +86,18 @@ def find_project_root(start: Optional[Path] = None) -> Path:
 
 
 def shared_dir_path(project_root: Path) -> Path:
+    """Return the shared directory path for the given project root."""
     return project_root / SHARED_DIR
 
 
 def config_path(project_root: Path) -> Path:
+    """Return the shared.json config path for the given project root."""
     return shared_dir_path(project_root) / CONFIG_FILE
+
+
+def hashes_path(project_root: Path) -> Path:
+    """Return the .shared-hashes.json path for the given project root."""
+    return shared_dir_path(project_root) / HASHES_FILE
 
 
 def ensure_shared_dir(project_root: Path) -> Path:
@@ -94,6 +105,7 @@ def ensure_shared_dir(project_root: Path) -> Path:
     sdir = shared_dir_path(project_root)
     sdir.mkdir(parents=True, exist_ok=True)
 
+    # Write .gitignore to keep fetched docs out of version control
     gitignore = sdir / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text(GITIGNORE_CONTENT, encoding="utf-8")
@@ -101,21 +113,18 @@ def ensure_shared_dir(project_root: Path) -> Path:
     return sdir
 
 
-def hashes_path(project_root: Path) -> Path:
-    return shared_dir_path(project_root) / HASHES_FILE
-
-
 def load_hashes(project_root: Path) -> dict[str, str]:
     """Load the stored ``{remote_path: blob_sha}`` mapping.
 
-    Returns an empty dict if the file doesn't exist.
+    Returns an empty dict if the file doesn't exist or is corrupt.
     """
     hp = hashes_path(project_root)
     if not hp.exists():
         return {}
     try:
         return json.loads(hp.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Failed to load hashes from %s: %s", hp, exc)
         return {}
 
 
@@ -139,13 +148,9 @@ def resolve_local_path(project_root: Path, local_path_str: str) -> Path:
 def extract_org_repo(url: str) -> str:
     """Extract ``org/repo`` from a Git URL (HTTPS or SSH).
 
-    Handles:
-    - ``https://github.com/org/repo.git``
-    - ``https://github.com/org/repo``
-    - ``git@github.com:org/repo.git``
-    - ``ssh://git@github.com/org/repo.git``
+    Handles HTTPS, SSH shorthand (git@host:org/repo), and
+    full SSH URLs (ssh://git@host/org/repo). Strips trailing .git.
     """
-    # Strip trailing .git
     url = url.rstrip("/")
     if url.endswith(".git"):
         url = url[:-4]
@@ -166,7 +171,7 @@ def extract_org_repo(url: str) -> str:
 def detect_repo_identity(project_root: Path) -> str:
     """Detect the current repo's ``org/repo`` from its git remote origin."""
     try:
-        from git import Repo, InvalidGitRepositoryError
+        from git import Repo
         repo = Repo(project_root)
         origin_url = repo.remotes.origin.url
         return extract_org_repo(origin_url)
@@ -199,13 +204,14 @@ def parse_shared_files(data: dict) -> List[SharedFile]:
 
 
 def load_config(project_root: Path) -> SharedConfig:
-    """Read and parse shared.json."""
+    """Read and parse shared.json from the project's shared directory."""
     cfg_path = config_path(project_root)
     if not cfg_path.exists():
         raise FileNotFoundError(f"Config not found: {cfg_path}")
 
     data = json.loads(cfg_path.read_text(encoding="utf-8"))
 
+    # Parse the source repo connection info
     repo_data = data["source_repo"]
     source_repo = SourceRepo(
         url=repo_data["url"],

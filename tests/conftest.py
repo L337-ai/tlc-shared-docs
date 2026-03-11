@@ -16,7 +16,7 @@ PUBLIC_REPO_FILE = "Python.gitignore"
 
 @pytest.fixture()
 def fake_project(tmp_path: Path):
-    """Create a minimal fake project with a .git marker and shared.json."""
+    """Create a minimal fake project with a .git marker and shared dir."""
     # Create .git marker so find_project_root works
     (tmp_path / ".git").mkdir()
 

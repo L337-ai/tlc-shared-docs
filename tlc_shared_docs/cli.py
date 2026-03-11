@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import __version__
-from .core import get_files, push_files
+from tlc_shared_docs import __version__
+from tlc_shared_docs.core import get_files, push_files
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -20,7 +20,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command")
 
-    # --- get ---
+    # --- get: pull shared files from the remote repo ---
     get_parser = sub.add_parser("get", help="Pull shared files from the remote repo")
     get_parser.add_argument(
         "--dry-run",
@@ -34,7 +34,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Use central control mode: fetch config from this repo URL",
     )
 
-    # --- push ---
+    # --- push: push local shared files to the remote repo ---
     push_parser = sub.add_parser("push", help="Push local shared files to the remote repo")
     push_parser.add_argument(
         "--dry-run",
@@ -57,6 +57,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Entry point for the CLI. Parses arguments and dispatches to
+    the appropriate get/push handler."""
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -65,6 +67,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     try:
+        # Dispatch to the correct command handler
         if args.command == "get":
             messages = get_files(dry_run=args.dry_run, central_url=args.central)
         elif args.command == "push":
@@ -76,7 +79,7 @@ def main(argv: list[str] | None = None) -> None:
         for msg in messages:
             print(msg)
 
-        # Exit with error code if there were conflicts or warnings
+        # Exit with error code if there were conflicts or aborted operations
         if any("CONFLICT" in m or "aborted" in m for m in messages):
             sys.exit(1)
 

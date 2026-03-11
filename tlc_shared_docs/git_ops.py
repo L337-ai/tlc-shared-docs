@@ -28,12 +28,14 @@ def list_remote_files(
     """Return remote file paths matching a glob *pattern*.
 
     Uses a treeless clone (``--filter=tree:0``) so only the tree metadata
-    is fetched — no file blobs are downloaded.
+    is fetched -- no file blobs are downloaded.
     """
     clone_dir = _tmp_clone_dir()
     try:
         repo = Repo.init(clone_dir)
         repo.git.remote("add", "origin", url)
+
+        # Treeless fetch: downloads tree objects but no blobs
         repo.git.fetch("origin", branch, depth=1, filter="tree:0")
 
         # List every file path in the tree
@@ -57,7 +59,8 @@ def get_remote_blob_shas(
     """Return ``{file_path: blob_sha}`` for each of *file_paths* that exists
     on *branch* of *url*.
 
-    Uses a treeless fetch — no file content is downloaded.
+    Uses a treeless fetch so no file content is downloaded -- only
+    tree metadata needed to read the blob SHA per path.
     """
     clone_dir = _tmp_clone_dir()
     try:
@@ -65,11 +68,11 @@ def get_remote_blob_shas(
         repo.git.remote("add", "origin", url)
         repo.git.fetch("origin", branch, depth=1, filter="tree:0")
 
+        # Parse full ls-tree output: "<mode> <type> <sha>\t<path>"
         output = repo.git.ls_tree("-r", f"origin/{branch}")
         if not output:
             return {}
 
-        # Each line: "<mode> <type> <sha>\t<path>"
         sha_map: dict[str, str] = {}
         wanted = set(file_paths)
         for line in output.splitlines():
@@ -91,7 +94,10 @@ def sparse_checkout_files(
     file_paths: List[str],
 ) -> tuple[Path, Repo]:
     """Clone *url* at *branch* with a **sparse checkout** containing only
-    *file_paths*.  Returns ``(clone_dir, Repo)``."""
+    *file_paths*.  Returns ``(clone_dir, Repo)``.
+
+    Depth=1 avoids fetching full history -- we only need latest content.
+    """
     clone_dir = _tmp_clone_dir()
     try:
         # Initialise an empty repo and configure sparse-checkout
@@ -99,7 +105,7 @@ def sparse_checkout_files(
         repo.git.remote("add", "origin", url)
         repo.git.config("core.sparseCheckout", "true")
 
-        # Write the sparse-checkout patterns
+        # Write the sparse-checkout patterns so only requested files appear
         sparse_file = Path(repo.git_dir) / "info" / "sparse-checkout"
         sparse_file.parent.mkdir(parents=True, exist_ok=True)
         sparse_file.write_text("\n".join(file_paths) + "\n", encoding="utf-8")
@@ -142,12 +148,13 @@ def push_files(
         repo.git.fetch("origin", branch, depth=1)
         repo.git.checkout(f"origin/{branch}", b=branch)
 
+        # Write each file and stage it for commit
         changed = False
         for remote_path, content in file_map.items():
             dest = clone_dir / remote_path
             dest.parent.mkdir(parents=True, exist_ok=True)
 
-            # Check if file already exists with same content
+            # Skip files that already match to avoid empty commits
             if dest.exists() and dest.read_bytes() == content:
                 continue
 
@@ -166,28 +173,6 @@ def push_files(
         repo.git.push(*push_args)
     except GitCommandError as exc:
         raise GitError(f"Failed to push to {url}: {exc}") from exc
-    finally:
-        shutil.rmtree(clone_dir, ignore_errors=True)
-
-
-def check_remote_unchanged(
-    url: str,
-    branch: str,
-    remote_path: str,
-    local_content: bytes,
-) -> bool:
-    """Return ``True`` if the remote file matches *local_content*
-    (i.e. no remote changes since last pull)."""
-    clone_dir = _tmp_clone_dir()
-    try:
-        clone_dir, _repo = sparse_checkout_files(url, branch, [remote_path])
-        remote_file = clone_dir / remote_path
-        if not remote_file.exists():
-            # File doesn't exist on remote yet — safe to push
-            return True
-        return remote_file.read_bytes() == local_content
-    except GitError:
-        raise
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
 
