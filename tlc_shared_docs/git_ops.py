@@ -49,6 +49,42 @@ def list_remote_files(
         shutil.rmtree(clone_dir, ignore_errors=True)
 
 
+def get_remote_blob_shas(
+    url: str,
+    branch: str,
+    file_paths: List[str],
+) -> dict[str, str]:
+    """Return ``{file_path: blob_sha}`` for each of *file_paths* that exists
+    on *branch* of *url*.
+
+    Uses a treeless fetch — no file content is downloaded.
+    """
+    clone_dir = _tmp_clone_dir()
+    try:
+        repo = Repo.init(clone_dir)
+        repo.git.remote("add", "origin", url)
+        repo.git.fetch("origin", branch, depth=1, filter="tree:0")
+
+        output = repo.git.ls_tree("-r", f"origin/{branch}")
+        if not output:
+            return {}
+
+        # Each line: "<mode> <type> <sha>\t<path>"
+        sha_map: dict[str, str] = {}
+        wanted = set(file_paths)
+        for line in output.splitlines():
+            parts = line.split(None, 3)  # mode, type, sha, path
+            if len(parts) == 4:
+                path = parts[3]
+                if path in wanted:
+                    sha_map[path] = parts[2]
+        return sha_map
+    except GitCommandError as exc:
+        raise GitError(f"Failed to get blob SHAs from {url}: {exc}") from exc
+    finally:
+        shutil.rmtree(clone_dir, ignore_errors=True)
+
+
 def sparse_checkout_files(
     url: str,
     branch: str,

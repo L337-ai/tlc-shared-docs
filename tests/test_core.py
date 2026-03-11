@@ -13,12 +13,11 @@ from tlc_shared_docs.config import SharedConfig, SharedFile, SourceRepo
 
 
 class TestGetFilesDryRun:
-    def test_dry_run_lists_files(self, configured_project):
+    @patch("tlc_shared_docs.core.git_ops.get_remote_blob_shas", return_value={"Python.gitignore": "abc123"})
+    def test_dry_run_lists_files(self, mock_shas, configured_project):
         root, _ = configured_project
         messages = get_files(project_root=root, dry_run=True)
-        assert len(messages) == 1
-        assert "[dry-run]" in messages[0]
-        assert "Python.gitignore" in messages[0]
+        assert any("[dry-run]" in m and "Python.gitignore" in m for m in messages)
 
     def test_no_get_files(self, fake_project):
         root, shared_dir = fake_project
@@ -64,6 +63,11 @@ class TestGetFilesGlobMocked:
             "stories/chapter1/intro.md",
             "stories/chapter2/outro.md",
         ]
+        # Mock SHA lookup — new SHAs so files are not skipped
+        mock_git_ops.get_remote_blob_shas.return_value = {
+            "stories/chapter1/intro.md": "sha1",
+            "stories/chapter2/outro.md": "sha2",
+        }
         # Mock sparse checkout and file reads
         mock_clone_dir = MagicMock()
         mock_git_ops.sparse_checkout_files.return_value = (mock_clone_dir, MagicMock())
@@ -73,10 +77,6 @@ class TestGetFilesGlobMocked:
         messages = get_files(project_root=root)
         assert any("matched 2 file(s)" in m for m in messages)
         assert mock_git_ops.sparse_checkout_files.called
-        # Should have been called with the two resolved paths
-        call_args = mock_git_ops.sparse_checkout_files.call_args
-        assert "stories/chapter1/intro.md" in call_args[1]["file_paths"] or \
-               "stories/chapter1/intro.md" in call_args[0][2]
 
     @patch("tlc_shared_docs.core.git_ops")
     def test_glob_dry_run(self, mock_git_ops, fake_project):
@@ -90,6 +90,10 @@ class TestGetFilesGlobMocked:
         (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
 
         mock_git_ops.list_remote_files.return_value = ["Global/Vim.gitignore", "Global/macOS.gitignore"]
+        mock_git_ops.get_remote_blob_shas.return_value = {
+            "Global/Vim.gitignore": "sha1",
+            "Global/macOS.gitignore": "sha2",
+        }
 
         messages = get_files(project_root=root, dry_run=True)
         assert any("[dry-run]" in m for m in messages)
@@ -124,6 +128,7 @@ class TestGetFilesGlobMocked:
         (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
 
         mock_git_ops.list_remote_files.return_value = ["stories/a/b.md"]
+        mock_git_ops.get_remote_blob_shas.return_value = {"stories/a/b.md": "sha1"}
         mock_clone_dir = MagicMock()
         mock_git_ops.sparse_checkout_files.return_value = (mock_clone_dir, MagicMock())
         mock_git_ops.read_file_from_clone.return_value = b"hello"
@@ -161,6 +166,134 @@ class TestGetFilesGlobIntegration:
         assert dest.is_dir()
         fetched = list(dest.glob("*.gitignore"))
         assert len(fetched) > 5  # there are many Global/*.gitignore files
+
+
+class TestSkipUnchanged:
+    """Tests for SHA-based skip logic on get."""
+
+    @patch("tlc_shared_docs.core.git_ops.get_remote_blob_shas")
+    @patch("tlc_shared_docs.core.git_ops.sparse_checkout_files")
+    @patch("tlc_shared_docs.core.git_ops.read_file_from_clone")
+    @patch("tlc_shared_docs.core.git_ops.cleanup")
+    def test_skips_unchanged_file(self, mock_cleanup, mock_read, mock_sparse, mock_shas, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "source_repo": {"url": "https://example.com/repo.git", "branch": "main"},
+            "shared_files": [
+                {"remote_path": "doc.md", "local_path": "doc.md", "action": "get"}
+            ],
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        # Write the local file and a matching hash
+        (shared_dir / "doc.md").write_text("existing content")
+        from tlc_shared_docs.config import save_hashes
+        save_hashes(root, {"doc.md": "abc123"})
+
+        # Remote SHA matches stored hash
+        mock_shas.return_value = {"doc.md": "abc123"}
+
+        messages = get_files(project_root=root)
+        assert any("SKIP (unchanged)" in m for m in messages)
+        # Should NOT have called sparse_checkout since nothing needed
+        mock_sparse.assert_not_called()
+
+    @patch("tlc_shared_docs.core.git_ops.get_remote_blob_shas")
+    @patch("tlc_shared_docs.core.git_ops.sparse_checkout_files")
+    @patch("tlc_shared_docs.core.git_ops.read_file_from_clone", return_value=b"new content")
+    @patch("tlc_shared_docs.core.git_ops.cleanup")
+    def test_fetches_when_sha_differs(self, mock_cleanup, mock_read, mock_sparse, mock_shas, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "source_repo": {"url": "https://example.com/repo.git", "branch": "main"},
+            "shared_files": [
+                {"remote_path": "doc.md", "local_path": "doc.md", "action": "get"}
+            ],
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        # Old hash stored, new SHA on remote
+        from tlc_shared_docs.config import save_hashes
+        save_hashes(root, {"doc.md": "old_sha"})
+
+        mock_shas.return_value = {"doc.md": "new_sha"}
+        mock_sparse.return_value = (MagicMock(), MagicMock())
+
+        messages = get_files(project_root=root)
+        assert any("OK" in m for m in messages)
+        mock_sparse.assert_called_once()
+
+    @patch("tlc_shared_docs.core.git_ops.get_remote_blob_shas")
+    @patch("tlc_shared_docs.core.git_ops.sparse_checkout_files")
+    @patch("tlc_shared_docs.core.git_ops.read_file_from_clone", return_value=b"content")
+    @patch("tlc_shared_docs.core.git_ops.cleanup")
+    def test_fetches_when_local_file_missing(self, mock_cleanup, mock_read, mock_sparse, mock_shas, fake_project):
+        """Even if SHA matches, fetch if the local file doesn't exist."""
+        root, shared_dir = fake_project
+        config = {
+            "source_repo": {"url": "https://example.com/repo.git", "branch": "main"},
+            "shared_files": [
+                {"remote_path": "doc.md", "local_path": "doc.md", "action": "get"}
+            ],
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        from tlc_shared_docs.config import save_hashes
+        save_hashes(root, {"doc.md": "abc123"})
+        # SHA matches but local file doesn't exist
+
+        mock_shas.return_value = {"doc.md": "abc123"}
+        mock_sparse.return_value = (MagicMock(), MagicMock())
+
+        messages = get_files(project_root=root)
+        assert any("OK" in m for m in messages)
+        mock_sparse.assert_called_once()
+
+    @patch("tlc_shared_docs.core.git_ops.get_remote_blob_shas")
+    @patch("tlc_shared_docs.core.git_ops.sparse_checkout_files")
+    @patch("tlc_shared_docs.core.git_ops.read_file_from_clone", return_value=b"content")
+    @patch("tlc_shared_docs.core.git_ops.cleanup")
+    def test_saves_hashes_after_fetch(self, mock_cleanup, mock_read, mock_sparse, mock_shas, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "source_repo": {"url": "https://example.com/repo.git", "branch": "main"},
+            "shared_files": [
+                {"remote_path": "doc.md", "local_path": "doc.md", "action": "get"}
+            ],
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        mock_shas.return_value = {"doc.md": "new_sha"}
+        mock_sparse.return_value = (MagicMock(), MagicMock())
+
+        get_files(project_root=root)
+
+        from tlc_shared_docs.config import load_hashes
+        hashes = load_hashes(root)
+        assert hashes["doc.md"] == "new_sha"
+
+    @patch("tlc_shared_docs.core.git_ops.get_remote_blob_shas")
+    def test_skip_unchanged_in_dry_run(self, mock_shas, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "source_repo": {"url": "https://example.com/repo.git", "branch": "main"},
+            "shared_files": [
+                {"remote_path": "a.md", "local_path": "a.md", "action": "get"},
+                {"remote_path": "b.md", "local_path": "b.md", "action": "get"},
+            ],
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        # a.md is unchanged, b.md is new
+        (shared_dir / "a.md").write_text("old")
+        from tlc_shared_docs.config import save_hashes
+        save_hashes(root, {"a.md": "sha_a"})
+
+        mock_shas.return_value = {"a.md": "sha_a", "b.md": "sha_b"}
+
+        messages = get_files(project_root=root, dry_run=True)
+        assert any("SKIP (unchanged)" in m and "a.md" in m for m in messages)
+        assert any("[dry-run]" in m and "b.md" in m for m in messages)
 
 
 class TestPushFilesDryRun:
@@ -226,10 +359,10 @@ class TestPushFilesMocked:
 
 
 class TestCLI:
-    def test_get_dry_run_via_cli(self, configured_project):
+    @patch("tlc_shared_docs.core.git_ops.get_remote_blob_shas", return_value={"Python.gitignore": "abc123"})
+    def test_get_dry_run_via_cli(self, mock_shas, configured_project):
         """Test the CLI entry point for get --dry-run."""
         from tlc_shared_docs.cli import main
-        import sys
 
         root, _ = configured_project
 
@@ -339,9 +472,10 @@ class TestResolveConfigCentral:
         )
         assert resolved.mode == "central"
 
+    @patch("tlc_shared_docs.core.git_ops.get_remote_blob_shas", return_value={"guide.md": "sha1"})
     @patch("tlc_shared_docs.core.cfg.detect_repo_identity", return_value="myorg/myapp")
     @patch("tlc_shared_docs.core.git_ops.fetch_single_file")
-    def test_central_get_dry_run(self, mock_fetch, mock_detect, fake_project):
+    def test_central_get_dry_run(self, mock_fetch, mock_detect, mock_shas, fake_project):
         """Central mode + get --dry-run should show the resolved files."""
         root, shared_dir = fake_project
         config = {

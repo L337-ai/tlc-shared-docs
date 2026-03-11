@@ -18,7 +18,9 @@ from tlc_shared_docs.config import (
     glob_prefix,
     is_glob,
     load_config,
+    load_hashes,
     resolve_local_path,
+    save_hashes,
     shared_dir_path,
 )
 
@@ -179,3 +181,27 @@ class TestLoadConfigCentralMode:
         root, _ = configured_project
         conf = load_config(root)
         assert conf.mode == "local"
+
+
+class TestHashes:
+    def test_load_empty(self, fake_project):
+        root, _ = fake_project
+        assert load_hashes(root) == {}
+
+    def test_save_and_load(self, fake_project):
+        root, _ = fake_project
+        hashes = {"file.md": "abc123", "other.md": "def456"}
+        save_hashes(root, hashes)
+        assert load_hashes(root) == hashes
+
+    def test_update_existing(self, fake_project):
+        root, _ = fake_project
+        save_hashes(root, {"a.md": "sha1"})
+        save_hashes(root, {"a.md": "sha2", "b.md": "sha3"})
+        loaded = load_hashes(root)
+        assert loaded == {"a.md": "sha2", "b.md": "sha3"}
+
+    def test_corrupt_file_returns_empty(self, fake_project):
+        root, shared_dir = fake_project
+        (shared_dir / ".shared-hashes.json").write_text("not valid json")
+        assert load_hashes(root) == {}

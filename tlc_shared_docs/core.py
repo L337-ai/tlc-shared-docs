@@ -143,19 +143,47 @@ def get_files(
 
     remote_paths = [f.remote_path for f in files_to_get]
 
-    if dry_run:
-        messages.extend(f"[dry-run] Would get: {rp}" for rp in remote_paths)
-        return messages
-
-    # Sparse-checkout all needed files in one clone
-    clone_dir, _repo = git_ops.sparse_checkout_files(
+    # Query remote blob SHAs to detect unchanged files
+    stored_hashes = cfg.load_hashes(root)
+    remote_shas = git_ops.get_remote_blob_shas(
         url=conf.source_repo.url,
         branch=conf.source_repo.branch,
         file_paths=remote_paths,
     )
 
+    # Filter: only fetch files whose SHA changed or that don't exist locally
+    files_needed: List[cfg.SharedFile] = []
+    for sf in files_to_get:
+        remote_sha = remote_shas.get(sf.remote_path)
+        if remote_sha is None:
+            # File doesn't exist on remote — will produce a warning later
+            files_needed.append(sf)
+            continue
+        stored_sha = stored_hashes.get(sf.remote_path)
+        local = cfg.resolve_local_path(root, sf.local_path)
+        if stored_sha == remote_sha and local.exists():
+            messages.append(f"SKIP (unchanged): {sf.remote_path}")
+        else:
+            files_needed.append(sf)
+
+    if dry_run:
+        messages.extend(f"[dry-run] Would get: {sf.remote_path}" for sf in files_needed)
+        return messages
+
+    if not files_needed:
+        messages.append("All files up to date.")
+        return messages
+
+    # Sparse-checkout only the files that changed
+    needed_paths = [sf.remote_path for sf in files_needed]
+    clone_dir, _repo = git_ops.sparse_checkout_files(
+        url=conf.source_repo.url,
+        branch=conf.source_repo.branch,
+        file_paths=needed_paths,
+    )
+
     try:
-        for sf in files_to_get:
+        for sf in files_needed:
             try:
                 content = git_ops.read_file_from_clone(clone_dir, sf.remote_path)
             except FileNotFoundError:
@@ -166,8 +194,16 @@ def get_files(
             local.parent.mkdir(parents=True, exist_ok=True)
             local.write_bytes(content)
             messages.append(f"OK: {sf.remote_path} -> {local.relative_to(root)}")
+
+            # Update stored hash
+            sha = remote_shas.get(sf.remote_path)
+            if sha:
+                stored_hashes[sf.remote_path] = sha
     finally:
         git_ops.cleanup(clone_dir)
+
+    # Persist updated hashes
+    cfg.save_hashes(root, stored_hashes)
 
     return messages
 

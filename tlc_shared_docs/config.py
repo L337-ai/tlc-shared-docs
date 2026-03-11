@@ -12,6 +12,7 @@ from typing import List, Optional
 
 SHARED_DIR = Path("docs") / "source" / "shared"
 CONFIG_FILE = "shared.json"
+HASHES_FILE = ".shared-hashes.json"
 CENTRAL_CONFIG_DIR = ".configs"
 
 # .gitignore content for the shared directory:
@@ -98,6 +99,30 @@ def ensure_shared_dir(project_root: Path) -> Path:
         gitignore.write_text(GITIGNORE_CONTENT, encoding="utf-8")
 
     return sdir
+
+
+def hashes_path(project_root: Path) -> Path:
+    return shared_dir_path(project_root) / HASHES_FILE
+
+
+def load_hashes(project_root: Path) -> dict[str, str]:
+    """Load the stored ``{remote_path: blob_sha}`` mapping.
+
+    Returns an empty dict if the file doesn't exist.
+    """
+    hp = hashes_path(project_root)
+    if not hp.exists():
+        return {}
+    try:
+        return json.loads(hp.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_hashes(project_root: Path, hashes: dict[str, str]) -> None:
+    """Persist the ``{remote_path: blob_sha}`` mapping."""
+    hp = hashes_path(project_root)
+    hp.write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
 
 
 def resolve_local_path(project_root: Path, local_path_str: str) -> Path:
