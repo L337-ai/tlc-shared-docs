@@ -2,12 +2,67 @@
 
 from __future__ import annotations
 
+import os
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import List, Optional
 
 from . import config as cfg
 from . import git_ops
+
+
+def _expand_get_entries(
+    conf: cfg.SharedConfig,
+) -> tuple[List[cfg.SharedFile], List[str]]:
+    """Expand glob entries in the get list into concrete SharedFile objects.
+
+    Returns ``(expanded_files, messages)``.  Messages contain dry-run or
+    warning info for glob resolution.
+    """
+    plain: List[cfg.SharedFile] = []
+    glob_entries: List[cfg.SharedFile] = []
+    messages: List[str] = []
+
+    for sf in conf.shared_files:
+        if sf.action != "get":
+            continue
+        if cfg.is_glob(sf.remote_path):
+            glob_entries.append(sf)
+        else:
+            plain.append(sf)
+
+    for sf in glob_entries:
+        matched = git_ops.list_remote_files(
+            url=conf.source_repo.url,
+            branch=conf.source_repo.branch,
+            pattern=sf.remote_path,
+        )
+        if not matched:
+            messages.append(f"WARNING: No remote files matched pattern: {sf.remote_path}")
+            continue
+
+        # Determine the prefix to strip so we preserve relative structure
+        prefix = cfg.glob_prefix(sf.remote_path)
+
+        for remote_path in matched:
+            # Build a local path that preserves directory structure under local_path
+            if prefix:
+                relative = remote_path[len(prefix):].lstrip("/")
+            else:
+                relative = remote_path
+            local_path = sf.local_path.rstrip("/") + "/" + relative
+
+            plain.append(cfg.SharedFile(
+                remote_path=remote_path,
+                local_path=local_path,
+                action="get",
+            ))
+
+        messages.append(
+            f"Glob '{sf.remote_path}' matched {len(matched)} file(s)"
+        )
+
+    return plain, messages
 
 
 def get_files(
@@ -22,14 +77,17 @@ def get_files(
     cfg.ensure_shared_dir(root)
     conf = cfg.load_config(root)
 
-    files_to_get = [f for f in conf.shared_files if f.action == "get"]
+    files_to_get, messages = _expand_get_entries(conf)
     if not files_to_get:
-        return ["No files with action=get found in shared.json"]
+        if not messages:
+            messages.append("No files with action=get found in shared.json")
+        return messages
 
     remote_paths = [f.remote_path for f in files_to_get]
 
     if dry_run:
-        return [f"[dry-run] Would get: {rp}" for rp in remote_paths]
+        messages.extend(f"[dry-run] Would get: {rp}" for rp in remote_paths)
+        return messages
 
     # Sparse-checkout all needed files in one clone
     clone_dir, _repo = git_ops.sparse_checkout_files(
@@ -38,7 +96,6 @@ def get_files(
         file_paths=remote_paths,
     )
 
-    messages: List[str] = []
     try:
         for sf in files_to_get:
             try:

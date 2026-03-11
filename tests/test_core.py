@@ -46,6 +46,122 @@ class TestGetFilesIntegration:
         assert "__pycache__" in content
 
 
+class TestGetFilesGlobMocked:
+    @patch("tlc_shared_docs.core.git_ops")
+    def test_glob_expands_to_concrete_files(self, mock_git_ops, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "source_repo": {"url": "https://example.com/repo.git", "branch": "main"},
+            "shared_files": [
+                {"remote_path": "stories/**/*", "local_path": "stories", "action": "get"}
+            ],
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        # Mock list_remote_files to return two matches
+        mock_git_ops.list_remote_files.return_value = [
+            "stories/chapter1/intro.md",
+            "stories/chapter2/outro.md",
+        ]
+        # Mock sparse checkout and file reads
+        mock_clone_dir = MagicMock()
+        mock_git_ops.sparse_checkout_files.return_value = (mock_clone_dir, MagicMock())
+        mock_git_ops.read_file_from_clone.return_value = b"# Content"
+        mock_git_ops.cleanup = MagicMock()
+
+        messages = get_files(project_root=root)
+        assert any("matched 2 file(s)" in m for m in messages)
+        assert mock_git_ops.sparse_checkout_files.called
+        # Should have been called with the two resolved paths
+        call_args = mock_git_ops.sparse_checkout_files.call_args
+        assert "stories/chapter1/intro.md" in call_args[1]["file_paths"] or \
+               "stories/chapter1/intro.md" in call_args[0][2]
+
+    @patch("tlc_shared_docs.core.git_ops")
+    def test_glob_dry_run(self, mock_git_ops, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "source_repo": {"url": "https://example.com/repo.git", "branch": "main"},
+            "shared_files": [
+                {"remote_path": "Global/*.gitignore", "local_path": "global_ignores", "action": "get"}
+            ],
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        mock_git_ops.list_remote_files.return_value = ["Global/Vim.gitignore", "Global/macOS.gitignore"]
+
+        messages = get_files(project_root=root, dry_run=True)
+        assert any("[dry-run]" in m for m in messages)
+        assert any("Vim.gitignore" in m for m in messages)
+
+    @patch("tlc_shared_docs.core.git_ops")
+    def test_glob_no_matches(self, mock_git_ops, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "source_repo": {"url": "https://example.com/repo.git", "branch": "main"},
+            "shared_files": [
+                {"remote_path": "nonexistent/**/*", "local_path": "nope", "action": "get"}
+            ],
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        mock_git_ops.list_remote_files.return_value = []
+
+        messages = get_files(project_root=root)
+        assert any("WARNING" in m and "No remote files matched" in m for m in messages)
+
+    @patch("tlc_shared_docs.core.git_ops")
+    def test_glob_preserves_relative_structure(self, mock_git_ops, fake_project):
+        """Files under stories/a/b.md with local_path='mystories' should land at mystories/a/b.md."""
+        root, shared_dir = fake_project
+        config = {
+            "source_repo": {"url": "https://example.com/repo.git", "branch": "main"},
+            "shared_files": [
+                {"remote_path": "stories/**/*", "local_path": "mystories", "action": "get"}
+            ],
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        mock_git_ops.list_remote_files.return_value = ["stories/a/b.md"]
+        mock_clone_dir = MagicMock()
+        mock_git_ops.sparse_checkout_files.return_value = (mock_clone_dir, MagicMock())
+        mock_git_ops.read_file_from_clone.return_value = b"hello"
+        mock_git_ops.cleanup = MagicMock()
+
+        messages = get_files(project_root=root)
+        # The file should be written to shared_dir / mystories / a / b.md
+        expected = shared_dir / "mystories" / "a" / "b.md"
+        assert expected.exists()
+        assert expected.read_bytes() == b"hello"
+
+
+class TestGetFilesGlobIntegration:
+    @pytest.mark.integration
+    def test_glob_get_from_real_repo(self, fake_project):
+        """Fetch Global/*.gitignore from github/gitignore."""
+        root, shared_dir = fake_project
+        config = {
+            "source_repo": {
+                "url": "https://github.com/github/gitignore.git",
+                "branch": "main",
+            },
+            "shared_files": [
+                {"remote_path": "Global/*.gitignore", "local_path": "global_ignores", "action": "get"}
+            ],
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        messages = get_files(project_root=root)
+        assert any("matched" in m for m in messages)
+        assert any("OK" in m for m in messages)
+
+        # Should have fetched multiple files into global_ignores/
+        dest = shared_dir / "global_ignores"
+        assert dest.is_dir()
+        fetched = list(dest.glob("*.gitignore"))
+        assert len(fetched) > 5  # there are many Global/*.gitignore files
+
+
 class TestPushFilesDryRun:
     def test_dry_run_lists_files(self, fake_project):
         root, shared_dir = fake_project

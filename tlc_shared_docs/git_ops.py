@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import shutil
 import tempfile
 from pathlib import Path
@@ -17,6 +18,35 @@ class GitError(RuntimeError):
 def _tmp_clone_dir() -> Path:
     """Return a fresh temporary directory for cloning."""
     return Path(tempfile.mkdtemp(prefix="tlc_shared_docs_"))
+
+
+def list_remote_files(
+    url: str,
+    branch: str,
+    pattern: str,
+) -> List[str]:
+    """Return remote file paths matching a glob *pattern*.
+
+    Uses a treeless clone (``--filter=tree:0``) so only the tree metadata
+    is fetched — no file blobs are downloaded.
+    """
+    clone_dir = _tmp_clone_dir()
+    try:
+        repo = Repo.init(clone_dir)
+        repo.git.remote("add", "origin", url)
+        repo.git.fetch("origin", branch, depth=1, filter="tree:0")
+
+        # List every file path in the tree
+        output = repo.git.ls_tree("-r", "--name-only", f"origin/{branch}")
+        all_files = output.splitlines() if output else []
+
+        # Filter with fnmatch (supports *, ?, [seq], **)
+        matched = [f for f in all_files if fnmatch.fnmatch(f, pattern)]
+        return matched
+    except GitCommandError as exc:
+        raise GitError(f"Failed to list files from {url}: {exc}") from exc
+    finally:
+        shutil.rmtree(clone_dir, ignore_errors=True)
 
 
 def sparse_checkout_files(

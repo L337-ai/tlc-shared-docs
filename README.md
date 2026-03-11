@@ -72,9 +72,35 @@ tlc-shared-docs push --dry-run
 |---|---|
 | `source_repo.url` | Git clone URL for the shared repo |
 | `source_repo.branch` | Branch to pull from / push to (default: `main`) |
-| `shared_files[].remote_path` | Path to the file in the remote repo |
+| `shared_files[].remote_path` | Path to the file in the remote repo (supports glob patterns for `get`) |
 | `shared_files[].local_path` | Local destination path (relative to `docs/source/shared/`) |
 | `shared_files[].action` | `get` (pull from remote) or `push` (push to remote). Default: `get` |
+
+### Wildcard / glob patterns
+
+The `remote_path` field supports glob patterns for `get` actions, allowing you to fetch multiple files with a single entry:
+
+```json
+{
+  "remote_path": "stories/**/*",
+  "local_path": "stories",
+  "action": "get"
+}
+```
+
+Supported patterns:
+- `*` — matches any file in a single directory (e.g., `docs/*.md`)
+- `**/*` — matches files recursively across directories (e.g., `stories/**/*`)
+- `?` — matches a single character (e.g., `chapter?.md`)
+- `[seq]` — matches any character in the set (e.g., `file[0-9].txt`)
+
+When using globs, `local_path` acts as the **destination directory**. Matched files preserve their directory structure relative to the non-glob prefix of the pattern. For example:
+
+| Pattern | Matched remote file | `local_path` | Written to |
+|---|---|---|---|
+| `stories/**/*` | `stories/ch1/intro.md` | `mystories` | `mystories/ch1/intro.md` |
+| `Global/*.gitignore` | `Global/Vim.gitignore` | `ignores` | `ignores/Vim.gitignore` |
+| `*.md` | `README.md` | `docs` | `docs/README.md` |
 
 ### Local path resolution
 

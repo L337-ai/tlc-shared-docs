@@ -13,6 +13,8 @@ from tlc_shared_docs.config import (
     SourceRepo,
     ensure_shared_dir,
     find_project_root,
+    glob_prefix,
+    is_glob,
     load_config,
     resolve_local_path,
     shared_dir_path,
@@ -91,3 +93,34 @@ class TestLoadConfig:
         root, _ = fake_project
         with pytest.raises(FileNotFoundError):
             load_config(root)
+
+
+class TestIsGlob:
+    def test_plain_path(self):
+        assert is_glob("docs/guide.md") is False
+
+    def test_star(self):
+        assert is_glob("*.md") is True
+
+    def test_double_star(self):
+        assert is_glob("stories/**/*") is True
+
+    def test_question_mark(self):
+        assert is_glob("file?.txt") is True
+
+    def test_bracket(self):
+        assert is_glob("file[0-9].txt") is True
+
+
+class TestGlobPrefix:
+    def test_no_prefix(self):
+        assert glob_prefix("*.md") == ""
+
+    def test_single_dir(self):
+        assert glob_prefix("stories/**/*") == "stories"
+
+    def test_nested_dirs(self):
+        assert glob_prefix("docs/source/**/*.md") == "docs/source"
+
+    def test_plain_path(self):
+        assert glob_prefix("docs/source/file.md") == "docs/source/file.md"

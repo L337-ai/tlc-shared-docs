@@ -42,6 +42,29 @@ class SharedConfig:
     shared_files: List[SharedFile] = field(default_factory=list)
 
 
+_GLOB_CHARS = set("*?[")
+
+
+def is_glob(path: str) -> bool:
+    """Return True if *path* contains glob wildcard characters."""
+    return bool(_GLOB_CHARS & set(path))
+
+
+def glob_prefix(pattern: str) -> str:
+    """Return the non-glob prefix of a pattern.
+
+    For ``stories/**/*.md`` this returns ``stories``.
+    For ``*.md`` this returns an empty string.
+    """
+    parts = pattern.replace("\\", "/").split("/")
+    prefix_parts = []
+    for p in parts:
+        if _GLOB_CHARS & set(p):
+            break
+        prefix_parts.append(p)
+    return "/".join(prefix_parts)
+
+
 def find_project_root(start: Optional[Path] = None) -> Path:
     """Walk up from *start* (default: cwd) to find the nearest directory
     that contains a ``.git`` folder, ``pyproject.toml``, or ``setup.py``."""
