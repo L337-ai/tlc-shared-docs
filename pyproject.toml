@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "tlc-shared-docs"
+version = "0.1.0"
+description = "Share documentation files between Git repositories"
+authors = []
+readme = "README.md"
+packages = [{include = "tlc_shared_docs"}]
+
+[tool.poetry.scripts]
+tlc-shared-docs = "tlc_shared_docs.cli:main"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+gitpython = "^3.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests that hit real git repos (deselect with '-m \"not integration\"')",
+]
