@@ -8,8 +8,8 @@ from typing import List
 
 import pytest
 
-from tlc_shared_docs.config import SharedConfig, SharedFile, SourceRepo, save_hashes, load_hashes
-from tlc_shared_docs.core import _resolve_config, get_files, push_files
+from tlc_shared_docs.config import SharedConfig, SharedFile, SourceRepo, UploadConfig, save_hashes, load_hashes
+from tlc_shared_docs.core import _discover_uploadable_files, _resolve_config, get_files, push_files
 
 
 # ---------------------------------------------------------------------------
@@ -602,3 +602,174 @@ class TestResolveCentralConfig:
         )
         assert any("[dry-run]" in m for m in messages)
         assert any("guide.md" in m for m in messages)
+
+
+# ===========================================================================
+# Upload discovery tests
+# ===========================================================================
+
+
+class TestDiscoverUploadableFiles:
+    """Tests for auto-detection of new local files to upload."""
+
+    def _conf_with_uploads(self, paths, shared_files=None):
+        """Build a SharedConfig with upload permissions."""
+        return SharedConfig(
+            source_repo=SourceRepo(url="https://example.com/shared.git", branch="main"),
+            shared_files=shared_files or [],
+            mode="central",
+            uploads=UploadConfig(allowed=True, paths=paths),
+        )
+
+    def test_discovers_new_file_matching_upload_pattern(self, fake_project):
+        root, shared_dir = fake_project
+        # Create a new file in the shared dir that's not in shared_files
+        contrib_dir = shared_dir / "contributions"
+        contrib_dir.mkdir()
+        (contrib_dir / "new-guide.md").write_text("# New Guide")
+
+        conf = self._conf_with_uploads(["contributions/**/*.md"])
+        candidates, msgs = _discover_uploadable_files(root, conf)
+
+        assert len(candidates) == 1
+        assert candidates[0][1] == "contributions/new-guide.md"
+        assert not msgs  # no denials
+
+    def test_denies_file_not_matching_any_pattern(self, fake_project):
+        root, shared_dir = fake_project
+        (shared_dir / "rogue.txt").write_text("not permitted")
+
+        conf = self._conf_with_uploads(["contributions/**/*.md"])
+        candidates, msgs = _discover_uploadable_files(root, conf)
+
+        assert len(candidates) == 0
+        assert any("DENIED" in m and "rogue.txt" in m for m in msgs)
+
+    def test_skips_internal_files(self, fake_project):
+        root, shared_dir = fake_project
+        # Internal files should never be candidates
+        (shared_dir / ".gitignore").write_text("*")
+        (shared_dir / "shared.json").write_text("{}")
+        (shared_dir / ".shared-hashes.json").write_text("{}")
+
+        conf = self._conf_with_uploads(["*"])
+        candidates, msgs = _discover_uploadable_files(root, conf)
+        assert len(candidates) == 0
+
+    def test_skips_files_already_in_shared_files(self, fake_project):
+        root, shared_dir = fake_project
+        (shared_dir / "existing.md").write_text("already managed")
+
+        managed = [SharedFile(remote_path="docs/existing.md", local_path="existing.md", action="push")]
+        conf = self._conf_with_uploads(["*.md"], shared_files=managed)
+        candidates, msgs = _discover_uploadable_files(root, conf)
+
+        assert len(candidates) == 0
+
+    def test_returns_empty_when_uploads_not_allowed(self, fake_project):
+        root, shared_dir = fake_project
+        (shared_dir / "new.md").write_text("content")
+
+        conf = SharedConfig(
+            source_repo=SourceRepo(url="https://example.com/shared.git", branch="main"),
+            shared_files=[],
+            mode="central",
+            uploads=UploadConfig(allowed=False, paths=["*.md"]),
+        )
+        candidates, msgs = _discover_uploadable_files(root, conf)
+        assert len(candidates) == 0
+
+    def test_returns_empty_when_no_upload_config(self, fake_project):
+        root, shared_dir = fake_project
+        (shared_dir / "new.md").write_text("content")
+
+        conf = SharedConfig(
+            source_repo=SourceRepo(url="https://example.com/shared.git", branch="main"),
+            shared_files=[],
+            mode="central",
+            uploads=None,
+        )
+        candidates, msgs = _discover_uploadable_files(root, conf)
+        assert len(candidates) == 0
+
+    def test_multiple_patterns_permit_different_files(self, fake_project):
+        root, shared_dir = fake_project
+        (shared_dir / "guide.md").write_text("guide")
+        img_dir = shared_dir / "images"
+        img_dir.mkdir()
+        (img_dir / "diagram.png").write_bytes(b"\x89PNG")
+
+        conf = self._conf_with_uploads(["*.md", "images/*.png"])
+        candidates, msgs = _discover_uploadable_files(root, conf)
+
+        remote_paths = {c[1] for c in candidates}
+        assert "guide.md" in remote_paths
+        assert "images/diagram.png" in remote_paths
+
+
+class TestPushWithUploadDiscovery:
+    """Tests for upload integration in push_files."""
+
+    def test_dry_run_shows_upload_candidates(self, fake_project):
+        root, shared_dir = fake_project
+        # Central config with uploads enabled
+        central_data = {
+            "shared_files": [],
+            "uploads": {"allowed": True, "paths": ["contributions/**/*.md"]},
+        }
+        _write_config(shared_dir, _make_config(mode="central"))
+
+        # Create a new file in shared dir
+        contrib = shared_dir / "contributions"
+        contrib.mkdir()
+        (contrib / "new.md").write_text("# New")
+
+        stub = StubGitOps(fetch_file_result=json.dumps(central_data).encode())
+        messages = push_files(
+            project_root=root, dry_run=True,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=stub.fetch_single_file,
+        )
+        assert any("[dry-run] Would upload:" in m and "new.md" in m for m in messages)
+
+    def test_dry_run_shows_denied_files(self, fake_project):
+        root, shared_dir = fake_project
+        central_data = {
+            "shared_files": [],
+            "uploads": {"allowed": True, "paths": ["contributions/**/*.md"]},
+        }
+        _write_config(shared_dir, _make_config(mode="central"))
+
+        # File that doesn't match any upload pattern
+        (shared_dir / "rogue.txt").write_text("nope")
+
+        stub = StubGitOps(fetch_file_result=json.dumps(central_data).encode())
+        messages = push_files(
+            project_root=root, dry_run=True,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=stub.fetch_single_file,
+        )
+        assert any("DENIED" in m and "rogue.txt" in m for m in messages)
+
+    def test_upload_files_included_in_push(self, fake_project):
+        root, shared_dir = fake_project
+        central_data = {
+            "shared_files": [],
+            "uploads": {"allowed": True, "paths": ["*.md"]},
+        }
+        _write_config(shared_dir, _make_config(mode="central"))
+        (shared_dir / "new-doc.md").write_text("# New Doc")
+
+        stub = StubGitOps(fetch_file_result=json.dumps(central_data).encode())
+        messages = push_files(
+            project_root=root, force=True,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=stub.fetch_single_file,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _cleanup=stub.cleanup,
+            _push=stub.push_files,
+        )
+
+        assert stub.push_called
+        assert "new-doc.md" in stub.push_kwargs["file_map"]
+        assert any("OK: pushed new-doc.md" in m for m in messages)

@@ -147,6 +147,52 @@ For example, to version-control `getting-started.md` and everything under `guide
 
 This is useful when your team wants certain shared docs to appear in your repo's git history — for example, files that are reviewed during PRs or that tools like GitHub Pages need to find in the repository.
 
+### Auto-uploading new files (central mode)
+
+When running in **central mode**, consumer repos can automatically upload new files to the shared repo. The central config controls which paths are allowed:
+
+```json
+{
+  "shared_files": [
+    { "remote_path": "guides/intro.md", "local_path": "intro.md", "action": "get" }
+  ],
+  "uploads": {
+    "allowed": true,
+    "paths": [
+      "contributions/**/*.md",
+      "images/*.png"
+    ]
+  }
+}
+```
+
+| Field | Description |
+|---|---|
+| `uploads.allowed` | Set to `true` to enable auto-upload for this repo |
+| `uploads.paths` | Glob patterns for permitted remote paths (supports `*`, `**`, `?`) |
+
+#### How it works
+
+1. Place new files anywhere under `docs/source/shared/` in your local repo.
+2. Run `tlc-shared-docs push`. The tool automatically scans for files that are **not** already listed in `shared_files`.
+3. Each new file's path (relative to `docs/source/shared/`) is checked against the `uploads.paths` patterns.
+   - **Permitted** files are included in the push commit.
+   - **Denied** files produce a `DENIED:` warning and are skipped.
+4. Use `--dry-run` to preview which files would be uploaded or denied.
+
+```bash
+# Preview what would be uploaded
+tlc-shared-docs push --dry-run
+
+# Push configured files + upload new ones
+tlc-shared-docs push
+
+# Force-push (skip conflict check)
+tlc-shared-docs push --force
+```
+
+> **Note:** Auto-upload only works in central mode. In local mode, add new entries directly to your `shared.json` `shared_files` list.
+
 ## Requirements
 
 - Python 3.9+

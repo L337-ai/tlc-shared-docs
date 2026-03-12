@@ -4,16 +4,35 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import shutil
-from pathlib import Path, PurePosixPath
-from types import ModuleType
+from pathlib import Path
 from typing import Callable, List, Optional
+
+import fnmatch
+import re
 
 import tlc_shared_docs.config as cfg
 import tlc_shared_docs.git_ops as git_ops
 
 logger = logging.getLogger(__name__)
+
+
+def _glob_match(path: str, pattern: str) -> bool:
+    """Match *path* against a glob *pattern* supporting ``**`` recursion.
+
+    ``fnmatch`` doesn't handle ``**`` as recursive, so we convert the
+    pattern to a regex where ``**/`` matches zero or more directory levels.
+    """
+    # Escape the pattern for regex, then restore glob semantics.
+    # Handle **/ first (zero or more dirs), then lone ** , then single *
+    regex = re.escape(pattern)
+    # re.escape turns * into \*, ** into \*\*, / into /
+    regex = regex.replace(r"\*\*/", "<<GLOBSTAR_SLASH>>")
+    regex = regex.replace(r"\*\*", "<<GLOBSTAR>>")
+    regex = regex.replace(r"\*", r"[^/]*")
+    regex = regex.replace(r"\?", r"[^/]")
+    regex = regex.replace("<<GLOBSTAR_SLASH>>", r"(.+/)?")
+    regex = regex.replace("<<GLOBSTAR>>", r".*")
+    return bool(re.fullmatch(regex, path))
 
 
 def _resolve_config(
@@ -57,6 +76,7 @@ def _resolve_config(
 
     central_data = json.loads(content.decode("utf-8"))
     central_files = cfg.parse_shared_files(central_data)
+    central_uploads = cfg.parse_upload_config(central_data)
 
     # Warn if local config also had shared_files -- central wins
     if conf.shared_files:
@@ -69,6 +89,7 @@ def _resolve_config(
         source_repo=source,
         shared_files=central_files,
         mode="central",
+        uploads=central_uploads,
     ), messages
 
 
@@ -235,6 +256,63 @@ def get_files(
     return messages
 
 
+def _discover_uploadable_files(
+    project_root: Path,
+    conf: cfg.SharedConfig,
+) -> tuple[List[tuple[Path, str]], List[str]]:
+    """Scan the shared directory for files not in ``shared_files``.
+
+    Returns ``(candidates, messages)`` where each candidate is
+    ``(local_path, remote_path)`` and messages contain DENIED warnings.
+
+    Only files whose remote path matches an ``uploads.paths`` pattern
+    are included; others produce a DENIED warning.
+    """
+    sdir = cfg.shared_dir_path(project_root)
+    messages: List[str] = []
+
+    # Internal files that are never uploaded
+    internal = {".gitignore", "shared.json", ".shared-hashes.json"}
+
+    # Collect all known local paths (from shared_files) so we skip them
+    known_locals: set[Path] = set()
+    for sf in conf.shared_files:
+        known_locals.add(cfg.resolve_local_path(project_root, sf.local_path))
+
+    upload_cfg = conf.uploads
+    if not upload_cfg or not upload_cfg.allowed:
+        return [], messages
+
+    # Walk the shared directory for new files
+    candidates: List[tuple[Path, str]] = []
+    for local_file in sdir.rglob("*"):
+        if not local_file.is_file():
+            continue
+
+        # Skip internal config/tracking files
+        rel_to_shared = local_file.relative_to(sdir).as_posix()
+        if rel_to_shared in internal:
+            continue
+
+        # Skip files already managed by shared_files entries
+        if local_file in known_locals:
+            continue
+
+        # The remote path mirrors the relative path under shared dir
+        remote_path = rel_to_shared
+
+        # Check if any upload pattern permits this path
+        permitted = any(
+            _glob_match(remote_path, pat) for pat in upload_cfg.paths
+        )
+        if permitted:
+            candidates.append((local_file, remote_path))
+        else:
+            messages.append(f"DENIED: {remote_path} does not match any upload pattern")
+
+    return candidates, messages
+
+
 def push_files(
     project_root: Optional[Path] = None,
     dry_run: bool = False,
@@ -263,7 +341,12 @@ def push_files(
     messages: List[str] = list(resolve_msgs)
 
     files_to_push = [f for f in conf.shared_files if f.action == "push"]
-    if not files_to_push:
+
+    # Discover new files eligible for upload (central mode only)
+    upload_candidates, upload_msgs = _discover_uploadable_files(root, conf)
+    messages.extend(upload_msgs)
+
+    if not files_to_push and not upload_candidates:
         messages.append("No files with action=push found in shared.json")
         return messages
 
@@ -271,6 +354,11 @@ def push_files(
         messages.extend(
             f"[dry-run] Would push: {f.local_path} -> {f.remote_path}"
             for f in files_to_push
+        )
+        # Show upload candidates in dry-run output
+        messages.extend(
+            f"[dry-run] Would upload: {remote_path}"
+            for _, remote_path in upload_candidates
         )
         return messages
 
@@ -283,6 +371,10 @@ def push_files(
             messages.append(f"WARNING: Local file not found, skipping: {local}")
             continue
         file_map[sf.remote_path] = local.read_bytes()
+
+    # Add upload candidates to the file map
+    for local_file, remote_path in upload_candidates:
+        file_map[remote_path] = local_file.read_bytes()
 
     if not file_map:
         messages.append("No files to push (all missing locally).")

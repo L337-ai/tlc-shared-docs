@@ -11,6 +11,7 @@ from tlc_shared_docs.config import (
     GITIGNORE_CONTENT,
     SharedFile,
     SourceRepo,
+    UploadConfig,
     central_config_path,
     ensure_shared_dir,
     extract_org_repo,
@@ -19,6 +20,7 @@ from tlc_shared_docs.config import (
     is_glob,
     load_config,
     load_hashes,
+    parse_upload_config,
     resolve_local_path,
     save_hashes,
     shared_dir_path,
@@ -203,3 +205,48 @@ class TestHashes:
         root, shared_dir = fake_project
         (shared_dir / ".shared-hashes.json").write_text("not valid json")
         assert load_hashes(root) == {}
+
+
+class TestParseUploadConfig:
+    def test_returns_none_when_section_absent(self):
+        assert parse_upload_config({}) is None
+
+    def test_returns_none_for_empty_uploads(self):
+        assert parse_upload_config({"uploads": {}}) is None
+
+    def test_parses_allowed_and_paths(self):
+        data = {"uploads": {"allowed": True, "paths": ["docs/**/*.md", "guides/*.rst"]}}
+        result = parse_upload_config(data)
+        assert isinstance(result, UploadConfig)
+        assert result.allowed is True
+        assert result.paths == ["docs/**/*.md", "guides/*.rst"]
+
+    def test_defaults_allowed_to_false(self):
+        data = {"uploads": {"paths": ["*.md"]}}
+        result = parse_upload_config(data)
+        assert result.allowed is False
+
+    def test_defaults_paths_to_empty(self):
+        data = {"uploads": {"allowed": True}}
+        result = parse_upload_config(data)
+        assert result.paths == []
+
+
+class TestLoadConfigWithUploads:
+    def test_uploads_parsed_from_shared_json(self, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "source_repo": {"url": "https://example.com/repo.git"},
+            "shared_files": [],
+            "uploads": {"allowed": True, "paths": ["contributions/**/*.md"]},
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+        conf = load_config(root)
+        assert conf.uploads is not None
+        assert conf.uploads.allowed is True
+        assert conf.uploads.paths == ["contributions/**/*.md"]
+
+    def test_uploads_none_when_absent(self, configured_project):
+        root, _ = configured_project
+        conf = load_config(root)
+        assert conf.uploads is None

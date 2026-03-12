@@ -43,10 +43,18 @@ class SharedFile:
 
 
 @dataclass
+class UploadConfig:
+    """Controls auto-upload of new local files to the shared repo."""
+    allowed: bool = False
+    paths: List[str] = field(default_factory=list)  # fnmatch patterns
+
+
+@dataclass
 class SharedConfig:
     source_repo: SourceRepo
     shared_files: List[SharedFile] = field(default_factory=list)
     mode: str = "local"  # "local" or "central"
+    uploads: Optional[UploadConfig] = None
 
 
 _GLOB_CHARS = set("*?[")
@@ -203,6 +211,20 @@ def parse_shared_files(data: dict) -> List[SharedFile]:
     return shared_files
 
 
+def parse_upload_config(data: dict) -> Optional[UploadConfig]:
+    """Parse the ``uploads`` section from a config dict.
+
+    Returns ``None`` if the section is absent or uploads are disabled.
+    """
+    uploads_data = data.get("uploads")
+    if not uploads_data:
+        return None
+    return UploadConfig(
+        allowed=uploads_data.get("allowed", False),
+        paths=uploads_data.get("paths", []),
+    )
+
+
 def load_config(project_root: Path) -> SharedConfig:
     """Read and parse shared.json from the project's shared directory."""
     cfg_path = config_path(project_root)
@@ -220,9 +242,11 @@ def load_config(project_root: Path) -> SharedConfig:
 
     mode = data.get("mode", "local")
     shared_files = parse_shared_files(data)
+    uploads = parse_upload_config(data)
 
     return SharedConfig(
         source_repo=source_repo,
         shared_files=shared_files,
         mode=mode,
+        uploads=uploads,
     )
