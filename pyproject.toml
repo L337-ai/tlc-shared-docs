@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "tlc-shared-docs"
-version = "1.1.0023"
+version = "1.1.0024"
 description = "Share documentation files between Git repositories"
 license = "MIT"
 authors = []

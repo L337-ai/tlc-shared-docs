@@ -368,6 +368,7 @@ def push_files(
     _push: Callable[..., None] = git_ops.push_files,
     _detect_identity: Callable[[Path], str] = cfg.detect_repo_identity,
     _fetch_file: Callable[..., bytes | None] = git_ops.fetch_single_file,
+    _get_shas: Callable[..., dict[str, str]] = git_ops.get_remote_blob_shas,
     _print: Callable[[str], None] = _noop_print,
 ) -> List[str]:
     """Push local shared files to the remote repo.
@@ -434,34 +435,42 @@ def push_files(
         emit("No files to push (all missing locally).")
         return messages
 
-    # Conflict check: verify remote files haven't changed since last pull
+    # Conflict check: verify no one else changed the remote since our last get.
+    # Compare remote blob SHAs against stored hashes — if the remote SHA
+    # differs from what we last pulled, someone else modified the file.
     if not force:
         emit("Checking for conflicts...")
-        remote_paths = list(file_map.keys())
-        clone_dir = None
+        stored_hashes = cfg.load_hashes(root)
         try:
-            clone_dir, _repo = _sparse_checkout(
+            remote_shas = _get_shas(
                 conf.source_repo.url,
                 conf.source_repo.branch,
-                remote_paths,
+                list(file_map.keys()),
             )
-            for remote_path, local_content in file_map.items():
-                remote_file = clone_dir / remote_path
-                if remote_file.exists():
-                    remote_content = remote_file.read_bytes()
-                    if remote_content != local_content:
-                        emit(
-                            f"CONFLICT: {remote_path} differs on remote. "
-                            f"Use --force to overwrite."
-                        )
+            for remote_path in file_map:
+                remote_sha = remote_shas.get(remote_path)
+                stored_sha = stored_hashes.get(remote_path)
+                # New file (not on remote yet) — no conflict possible
+                if remote_sha is None:
+                    continue
+                # File exists on remote but we never pulled it — conflict
+                if stored_sha is None:
+                    emit(
+                        f"CONFLICT: {remote_path} exists on remote but was never "
+                        f"pulled. Use --force to overwrite."
+                    )
+                    continue
+                # Remote changed since our last pull — conflict
+                if remote_sha != stored_sha:
+                    emit(
+                        f"CONFLICT: {remote_path} was modified on remote since "
+                        f"last pull. Use --force to overwrite."
+                    )
             if any("CONFLICT" in m for m in messages):
                 emit("Push aborted due to conflicts. Use --force to overwrite.")
                 return messages
         except git_ops.GitError as exc:
             logger.warning("Could not check remote for conflicts: %s", exc)
-        finally:
-            if clone_dir:
-                _cleanup(clone_dir)
 
     # Build the commit message from the local repo identity
     repo_name = _repo_name_from_root(root)
