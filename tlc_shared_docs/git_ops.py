@@ -151,15 +151,31 @@ def push_files(
         repo.git.fetch("origin", branch, depth=1)
         repo.git.checkout(f"origin/{branch}", b=branch)
 
-        # Write each file and stage it for commit
+        # Write each file and stage it for commit.
+        # Compare using git's blob SHA rather than raw bytes, because
+        # git may apply line-ending normalization (autocrlf) on checkout
+        # which would cause a false byte-match on Windows.
+        existing_shas: dict[str, str] = {}
+        try:
+            tree_output = repo.git.ls_tree("-r", f"origin/{branch}")
+            for line in tree_output.splitlines():
+                parts = line.split(None, 3)
+                if len(parts) == 4:
+                    existing_shas[parts[3]] = parts[2]
+        except GitCommandError:
+            pass  # if ls-tree fails, treat all files as new
+
         actually_pushed: List[str] = []
         for remote_path, content in file_map.items():
             dest = clone_dir / remote_path
             dest.parent.mkdir(parents=True, exist_ok=True)
 
-            # Skip files that already match to avoid empty commits
-            if dest.exists() and dest.read_bytes() == content:
-                continue
+            # Compute the blob SHA git would assign to the new content,
+            # then compare against the existing blob SHA on the remote
+            new_sha = repo.git.hash_object("--stdin", input=content)
+            old_sha = existing_shas.get(remote_path)
+            if old_sha and old_sha == new_sha:
+                continue  # content identical at the git level
 
             dest.write_bytes(content)
             repo.index.add([remote_path])
