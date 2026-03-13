@@ -281,15 +281,18 @@ def _prefix_local_paths(conf: SharedConfig, project_name: str) -> SharedConfig:
 
     Absolute paths (starting with ``/``) are left unchanged since
     they resolve from the project root, not the shared directory.
+    Paths already starting with *project_name/* are left unchanged
+    to avoid double-prefixing.
     """
+    prefix = f"{project_name}/"
     prefixed: List[SharedFile] = []
     for sf in conf.shared_files:
-        if sf.local_path.startswith("/"):
+        if sf.local_path.startswith("/") or sf.local_path.startswith(prefix):
             prefixed.append(sf)
         else:
             prefixed.append(SharedFile(
                 remote_path=sf.remote_path,
-                local_path=f"{project_name}/{sf.local_path}",
+                local_path=f"{prefix}{sf.local_path}",
                 action=sf.action,
             ))
     return SharedConfig(

@@ -339,11 +339,28 @@ class TestMultiProjectConfig:
 
     def test_auto_prefixes_local_paths_with_project_name(self, fake_project):
         root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "myproj": {
+                    "source_repo": {"url": "https://example.com/repo.git"},
+                    "shared_files": [
+                        {"remote_path": "guide.md", "local_path": "guide.md", "action": "get"}
+                    ],
+                },
+            },
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        conf = load_config(root, project="myproj")
+        assert conf.shared_files[0].local_path == "myproj/guide.md"
+
+    def test_skips_prefix_when_local_path_already_starts_with_project_name(self, fake_project):
+        root, shared_dir = fake_project
         (shared_dir / "shared.json").write_text(json.dumps(self._multi_config()), encoding="utf-8")
 
         conf = load_config(root, project="events")
-        # Original local_path was "events/guide.md", should become "events/events/guide.md"
-        assert conf.shared_files[0].local_path == "events/events/guide.md"
+        # Original local_path was "events/guide.md" — already starts with "events/"
+        assert conf.shared_files[0].local_path == "events/guide.md"
 
     def test_absolute_local_paths_not_prefixed(self, fake_project):
         root, shared_dir = fake_project
