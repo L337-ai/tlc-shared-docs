@@ -72,12 +72,13 @@ class StubGitOps:
     def fetch_single_file(self, url: str, branch: str, file_path: str) -> bytes | None:
         return self.fetch_file_result
 
-    def push_files(self, url: str, branch: str, file_map: dict, commit_message: str, force: bool = False) -> None:
+    def push_files(self, url: str, branch: str, file_map: dict, commit_message: str, force: bool = False) -> List[str]:
         self.push_called = True
         self.push_kwargs = {
             "url": url, "branch": branch, "file_map": file_map,
             "commit_message": commit_message, "force": force,
         }
+        return list(file_map.keys())
 
 
 def _stub_detect_identity(root: Path) -> str:

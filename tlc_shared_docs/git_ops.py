@@ -134,11 +134,14 @@ def push_files(
     file_map: dict[str, bytes],
     commit_message: str,
     force: bool = False,
-) -> None:
+) -> List[str]:
     """Clone *url*, write *file_map* ``{remote_path: content}``, commit, and
     push to *branch*.
 
     If *force* is ``True`` the push uses ``--force``.
+
+    Returns a list of remote paths that were actually written (i.e., differed
+    from what was already on the remote). An empty list means nothing changed.
     """
     clone_dir = _tmp_clone_dir()
     try:
@@ -149,7 +152,7 @@ def push_files(
         repo.git.checkout(f"origin/{branch}", b=branch)
 
         # Write each file and stage it for commit
-        changed = False
+        actually_pushed: List[str] = []
         for remote_path, content in file_map.items():
             dest = clone_dir / remote_path
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -160,10 +163,10 @@ def push_files(
 
             dest.write_bytes(content)
             repo.index.add([remote_path])
-            changed = True
+            actually_pushed.append(remote_path)
 
-        if not changed:
-            return  # nothing to push
+        if not actually_pushed:
+            return []  # nothing to push
 
         repo.index.commit(commit_message)
 
@@ -171,6 +174,7 @@ def push_files(
         if force:
             push_args.insert(0, "--force")
         repo.git.push(*push_args)
+        return actually_pushed
     except GitCommandError as exc:
         raise GitError(f"Failed to push to {url}: {exc}") from exc
     finally:

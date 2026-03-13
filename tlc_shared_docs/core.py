@@ -478,7 +478,7 @@ def push_files(
     commit_msg = f"Updated by {repo_name} on {branch_name}"
 
     emit(f"Pushing {len(file_map)} file(s) to {conf.source_repo.url}...")
-    _push(
+    actually_pushed = _push(
         url=conf.source_repo.url,
         branch=conf.source_repo.branch,
         file_map=file_map,
@@ -486,12 +486,18 @@ def push_files(
         force=force,
     )
 
-    for remote_path in file_map:
-        emit(f"OK: pushed {remote_path}")
+    if not actually_pushed:
+        emit("No changes detected — all files already match remote. Nothing pushed.")
+    else:
+        for remote_path in actually_pushed:
+            emit(f"OK: pushed {remote_path}")
+        skipped_count = len(file_map) - len(actually_pushed)
+        if skipped_count:
+            emit(f"SKIP (unchanged): {skipped_count} file(s) already match remote")
 
     # Summary line
     proj_label = f" to {project}" if project else ""
-    emit(f"Done: {len(file_map)} file(s) pushed{proj_label}.")
+    emit(f"Done: {len(actually_pushed)} of {len(file_map)} file(s) pushed{proj_label}.")
 
     return messages
 
