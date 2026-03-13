@@ -225,6 +225,49 @@ def parse_upload_config(data: dict) -> Optional[UploadConfig]:
     )
 
 
+# Only allow characters safe for directory names on all platforms
+_VALID_PROJECT_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+
+
+def validate_project_name(name: str) -> None:
+    """Raise ``ValueError`` if *name* is not a valid folder name.
+
+    Allows alphanumerics, hyphens, underscores, and dots.
+    Must start with an alphanumeric character.
+    """
+    if not _VALID_PROJECT_NAME.match(name):
+        raise ValueError(
+            f"Invalid project name '{name}'. "
+            f"Must match [a-zA-Z0-9][a-zA-Z0-9._-]* "
+            f"(alphanumerics, hyphens, underscores, dots; "
+            f"must start with a letter or digit)."
+        )
+
+
+def _prefix_local_paths(conf: SharedConfig, project_name: str) -> SharedConfig:
+    """Prefix every ``local_path`` in *conf* with *project_name/*.
+
+    Absolute paths (starting with ``/``) are left unchanged since
+    they resolve from the project root, not the shared directory.
+    """
+    prefixed: List[SharedFile] = []
+    for sf in conf.shared_files:
+        if sf.local_path.startswith("/"):
+            prefixed.append(sf)
+        else:
+            prefixed.append(SharedFile(
+                remote_path=sf.remote_path,
+                local_path=f"{project_name}/{sf.local_path}",
+                action=sf.action,
+            ))
+    return SharedConfig(
+        source_repo=conf.source_repo,
+        shared_files=prefixed,
+        mode=conf.mode,
+        uploads=conf.uploads,
+    )
+
+
 def _parse_project_entry(data: dict) -> SharedConfig:
     """Parse a single project entry (or legacy root) into a SharedConfig."""
     repo_data = data["source_repo"]
@@ -250,6 +293,10 @@ def load_config(project_root: Path, project: Optional[str] = None) -> SharedConf
 
     When using multi-project format, *project* selects which entry to use.
     Falls back to ``default_project`` if *project* is ``None``.
+
+    In multi-project mode, all relative ``local_path`` values are
+    automatically prefixed with the project name to isolate each
+    project's files into its own subdirectory.
     """
     cfg_path = config_path(project_root)
     if not cfg_path.exists():
@@ -260,6 +307,11 @@ def load_config(project_root: Path, project: Optional[str] = None) -> SharedConf
     # Multi-project format: {"projects": {...}}
     if "projects" in data:
         projects = data["projects"]
+
+        # Validate all project names upfront
+        for name in projects:
+            validate_project_name(name)
+
         chosen = project or data.get("default_project")
 
         if not chosen:
@@ -275,7 +327,8 @@ def load_config(project_root: Path, project: Optional[str] = None) -> SharedConf
                 f"Project '{chosen}' not found. Available projects: {available}"
             )
 
-        return _parse_project_entry(projects[chosen])
+        conf = _parse_project_entry(projects[chosen])
+        return _prefix_local_paths(conf, chosen)
 
     # Legacy single-source format
     return _parse_project_entry(data)

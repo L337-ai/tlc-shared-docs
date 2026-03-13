@@ -240,7 +240,28 @@ tlc-shared-docs push -p events --dry-run
 
 If no `--project` flag is given and no `default_project` is set, the command exits with an error listing available projects.
 
-> **Backward compatibility:** The legacy single-source format (with `source_repo` at the root) still works exactly as before. No migration needed.
+#### Automatic file isolation
+
+In multi-project mode, each project's files are automatically placed into a subdirectory named after the project. You don't need to manually prefix `local_path` — it's handled for you:
+
+```
+docs/source/shared/
+├── shared.json
+├── auth/              ← files from the "auth" project
+│   └── guide.md
+├── events/            ← files from the "events" project
+│   └── architecture.md
+└── agent-coder/       ← files from the "agent-coder" project
+    └── spec.md
+```
+
+For example, if the central config for the `agent-coder` project defines `"local_path": "spec.md"`, the file is written to `docs/source/shared/agent-coder/spec.md`. Absolute paths (starting with `/`) bypass this prefix and resolve from the project root as usual.
+
+#### Project name rules
+
+Project names must be valid folder names: alphanumerics, hyphens, underscores, and dots, starting with a letter or digit. Invalid names (e.g., `../escape`, names with spaces or special characters) are rejected at config load time.
+
+> **Backward compatibility:** The legacy single-source format (with `source_repo` at the root) still works exactly as before — no prefixing, no migration needed.
 
 ## Requirements
 

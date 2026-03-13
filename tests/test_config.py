@@ -24,6 +24,7 @@ from tlc_shared_docs.config import (
     resolve_local_path,
     save_hashes,
     shared_dir_path,
+    validate_project_name,
 )
 
 
@@ -334,3 +335,79 @@ class TestMultiProjectConfig:
 
         conf = load_config(root, project="auth")
         assert conf.source_repo.branch == "main"
+
+    def test_auto_prefixes_local_paths_with_project_name(self, fake_project):
+        root, shared_dir = fake_project
+        (shared_dir / "shared.json").write_text(json.dumps(self._multi_config()), encoding="utf-8")
+
+        conf = load_config(root, project="events")
+        # Original local_path was "events/guide.md", should become "events/events/guide.md"
+        assert conf.shared_files[0].local_path == "events/events/guide.md"
+
+    def test_absolute_local_paths_not_prefixed(self, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "myproj": {
+                    "source_repo": {"url": "https://example.com/repo.git"},
+                    "shared_files": [
+                        {"remote_path": "doc.md", "local_path": "/src/docs/doc.md", "action": "get"}
+                    ],
+                },
+            },
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        conf = load_config(root, project="myproj")
+        assert conf.shared_files[0].local_path == "/src/docs/doc.md"
+
+    def test_legacy_format_does_not_prefix_local_paths(self, configured_project):
+        root, _ = configured_project
+        conf = load_config(root)
+        # Legacy format should not alter local_path
+        assert conf.shared_files[0].local_path == "python_gitignore.txt"
+
+
+class TestValidateProjectName:
+    def test_valid_names_pass(self):
+        for name in ["auth", "agent-coder", "tlc_core", "my.project", "A1"]:
+            validate_project_name(name)  # should not raise
+
+    def test_rejects_empty_string(self):
+        with pytest.raises(ValueError, match="Invalid project name"):
+            validate_project_name("")
+
+    def test_rejects_leading_hyphen(self):
+        with pytest.raises(ValueError, match="Invalid project name"):
+            validate_project_name("-bad")
+
+    def test_rejects_leading_dot(self):
+        with pytest.raises(ValueError, match="Invalid project name"):
+            validate_project_name(".hidden")
+
+    def test_rejects_slashes(self):
+        with pytest.raises(ValueError, match="Invalid project name"):
+            validate_project_name("org/repo")
+
+    def test_rejects_spaces(self):
+        with pytest.raises(ValueError, match="Invalid project name"):
+            validate_project_name("my project")
+
+    def test_rejects_special_characters(self):
+        for name in ["proj@1", "proj!x", "proj:1", "proj<x>"]:
+            with pytest.raises(ValueError, match="Invalid project name"):
+                validate_project_name(name)
+
+    def test_invalid_name_in_config_raises_on_load(self, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "../escape": {
+                    "source_repo": {"url": "https://example.com/repo.git"},
+                },
+            },
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="Invalid project name"):
+            load_config(root, project="../escape")

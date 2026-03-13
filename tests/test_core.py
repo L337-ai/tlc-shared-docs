@@ -789,13 +789,13 @@ class TestMultiProjectGetAndPush:
                 "auth": {
                     "source_repo": {"url": "https://example.com/auth.git"},
                     "shared_files": [
-                        {"remote_path": "auth/guide.md", "local_path": "auth/guide.md", "action": "get"}
+                        {"remote_path": "guide.md", "local_path": "guide.md", "action": "get"}
                     ],
                 },
                 "agent": {
                     "source_repo": {"url": "https://example.com/agent.git"},
                     "shared_files": [
-                        {"remote_path": "agent/spec.md", "local_path": "agent/spec.md", "action": "get"}
+                        {"remote_path": "spec.md", "local_path": "spec.md", "action": "get"}
                     ],
                 },
             },
@@ -809,8 +809,8 @@ class TestMultiProjectGetAndPush:
         _write_config(shared_dir, self._multi_config())
 
         stub = StubGitOps(
-            remote_shas={"agent/spec.md": "sha1"},
-            sparse_files={"agent/spec.md": b"# Agent Spec"},
+            remote_shas={"spec.md": "sha1"},
+            sparse_files={"spec.md": b"# Agent Spec"},
         )
         messages = get_files(
             project_root=root, project="agent",
@@ -819,20 +819,20 @@ class TestMultiProjectGetAndPush:
             _read_clone=stub.read_file_from_clone,
             _cleanup=stub.cleanup,
         )
-        assert any("OK" in m and "agent/spec.md" in m for m in messages)
-        # Should not have fetched auth files
-        assert not any("auth" in m for m in messages)
+        assert any("OK" in m and "spec.md" in m for m in messages)
+        # File lands under the agent/ subdirectory
+        assert (shared_dir / "agent" / "spec.md").exists()
 
     def test_get_dry_run_with_default_project(self, fake_project):
         root, shared_dir = fake_project
         _write_config(shared_dir, self._multi_config(default="auth"))
 
-        stub = StubGitOps(remote_shas={"auth/guide.md": "sha1"})
+        stub = StubGitOps(remote_shas={"guide.md": "sha1"})
         messages = get_files(
             project_root=root, dry_run=True,
             _get_shas=stub.get_remote_blob_shas,
         )
-        assert any("[dry-run]" in m and "auth/guide.md" in m for m in messages)
+        assert any("[dry-run]" in m and "guide.md" in m for m in messages)
 
     def test_get_raises_without_project_or_default(self, fake_project):
         root, shared_dir = fake_project
@@ -855,7 +855,9 @@ class TestMultiProjectGetAndPush:
             "default_project": "alpha",
         }
         _write_config(shared_dir, config)
-        (shared_dir / "a.md").write_text("# Alpha doc")
+        # File must be at the auto-prefixed location: alpha/a.md
+        (shared_dir / "alpha").mkdir()
+        (shared_dir / "alpha" / "a.md").write_text("# Alpha doc")
 
         stub = StubGitOps()
         messages = push_files(
@@ -866,3 +868,38 @@ class TestMultiProjectGetAndPush:
         )
         assert stub.push_called
         assert stub.push_kwargs["url"] == "https://example.com/alpha.git"
+
+    def test_projects_isolate_into_separate_subdirectories(self, fake_project):
+        """Files from different projects land in separate subdirs."""
+        root, shared_dir = fake_project
+        _write_config(shared_dir, self._multi_config())
+
+        # Fetch from "auth" project
+        stub_auth = StubGitOps(
+            remote_shas={"guide.md": "sha1"},
+            sparse_files={"guide.md": b"# Auth Guide"},
+        )
+        get_files(
+            project_root=root, project="auth",
+            _get_shas=stub_auth.get_remote_blob_shas,
+            _sparse_checkout=stub_auth.sparse_checkout_files,
+            _read_clone=stub_auth.read_file_from_clone,
+            _cleanup=stub_auth.cleanup,
+        )
+
+        # Fetch from "agent" project
+        stub_agent = StubGitOps(
+            remote_shas={"spec.md": "sha2"},
+            sparse_files={"spec.md": b"# Agent Spec"},
+        )
+        get_files(
+            project_root=root, project="agent",
+            _get_shas=stub_agent.get_remote_blob_shas,
+            _sparse_checkout=stub_agent.sparse_checkout_files,
+            _read_clone=stub_agent.read_file_from_clone,
+            _cleanup=stub_agent.cleanup,
+        )
+
+        # Each project's files are in their own subdirectory
+        assert (shared_dir / "auth" / "guide.md").read_bytes() == b"# Auth Guide"
+        assert (shared_dir / "agent" / "spec.md").read_bytes() == b"# Agent Spec"
