@@ -10,10 +10,36 @@ import tlc_shared_docs.config as cfg
 from tlc_shared_docs.core import get_files, push_files
 
 
+_EPILOG = """\
+commands:
+  get   Pull shared files from the remote repo
+        --dry-run              Preview without making changes
+        --central URL          Fetch config from a central repo URL
+        -p, --project NAME     Select a named project (multi-project configs)
+
+  push  Push local shared files to the remote repo
+        --dry-run              Preview without making changes
+        --force                Overwrite even if remote files changed
+        --central URL          Fetch config from a central repo URL
+        -p, --project NAME     Select a named project (multi-project configs)
+
+  list  List available projects defined in shared.json
+
+examples:
+  tlc-shared-docs list                      Show available projects
+  tlc-shared-docs get -p agent-coder        Pull docs for a specific project
+  tlc-shared-docs get --dry-run             Preview what would be fetched
+  tlc-shared-docs push --force              Push and overwrite remote changes
+  tlc-shared-docs push -p auth --dry-run    Preview push for a project
+"""
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tlc-shared-docs",
         description="Share documentation files between Git repositories.",
+        epilog=_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
