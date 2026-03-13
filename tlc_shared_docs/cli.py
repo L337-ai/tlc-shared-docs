@@ -150,19 +150,18 @@ def main(argv: list[str] | None = None) -> None:
             return
         elif args.command == "get":
             messages = get_files(
-                dry_run=args.dry_run, central_url=args.central, project=args.project,
+                dry_run=args.dry_run, central_url=args.central,
+                project=args.project, _print=print,
             )
         elif args.command == "push":
             messages = push_files(
                 dry_run=args.dry_run, force=args.force,
                 central_url=args.central, project=args.project,
+                _print=print,
             )
         else:
             parser.print_help()
             sys.exit(1)
-
-        for msg in messages:
-            print(msg)
 
         # Exit with error code if there were conflicts or aborted operations
         if any("CONFLICT" in m or "aborted" in m for m in messages):

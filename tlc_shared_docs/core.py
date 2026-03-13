@@ -128,6 +128,11 @@ def _expand_get_entries(
     return plain, messages
 
 
+def _noop_print(msg: str) -> None:
+    """No-op print for test injection — messages are still collected."""
+    pass
+
+
 def get_files(
     project_root: Optional[Path] = None,
     dry_run: bool = False,
@@ -140,15 +145,23 @@ def get_files(
     _detect_identity: Callable[[Path], str] = cfg.detect_repo_identity,
     _fetch_file: Callable[..., bytes | None] = git_ops.fetch_single_file,
     _list_remote: Callable[..., List[str]] = git_ops.list_remote_files,
+    _print: Callable[[str], None] = _noop_print,
 ) -> List[str]:
     """Pull shared files from the remote repo.
 
     Returns a list of human-readable status messages.
+    *_print* is called immediately for each message (live progress).
     Dependency parameters (prefixed with _) allow test injection.
     """
+    def emit(msg: str) -> None:
+        messages.append(msg)
+        _print(msg)
+
     root = project_root or cfg.find_project_root()
     cfg.ensure_shared_dir(root)
     conf = cfg.load_config(root, project=project)
+
+    messages: List[str] = []
 
     # Resolve central mode if applicable
     conf, resolve_msgs = _resolve_config(
@@ -156,19 +169,23 @@ def get_files(
         _detect_identity=_detect_identity,
         _fetch_file=_fetch_file,
     )
-    messages: List[str] = list(resolve_msgs)
+    for m in resolve_msgs:
+        emit(m)
 
     # Expand any glob patterns into concrete file entries
+    emit(f"Fetching file list from {conf.source_repo.url}...")
     files_to_get, expand_msgs = _expand_get_entries(conf, _list_remote=_list_remote)
-    messages.extend(expand_msgs)
+    for m in expand_msgs:
+        emit(m)
     if not files_to_get:
-        if not messages:
-            messages.append("No files with action=get found in shared.json")
+        if len(messages) <= 1:
+            emit("No files with action=get found in shared.json")
         return messages
 
     remote_paths = [f.remote_path for f in files_to_get]
 
     # Query remote blob SHAs to detect unchanged files (cheap, no blobs)
+    emit(f"Checking for changes ({len(remote_paths)} file(s))...")
     stored_hashes = cfg.load_hashes(root)
     remote_shas = _get_shas(
         conf.source_repo.url,
@@ -178,29 +195,34 @@ def get_files(
 
     # Filter: only fetch files whose SHA changed or that don't exist locally
     files_needed: List[cfg.SharedFile] = []
+    skipped = 0
     for sf in files_to_get:
         remote_sha = remote_shas.get(sf.remote_path)
         if remote_sha is None:
-            # File doesn't exist on remote -- will produce a warning later
             files_needed.append(sf)
             continue
         stored_sha = stored_hashes.get(sf.remote_path)
         local = cfg.resolve_local_path(root, sf.local_path)
         if stored_sha == remote_sha and local.exists():
-            messages.append(f"SKIP (unchanged): {sf.remote_path}")
+            emit(f"SKIP (unchanged): {sf.remote_path}")
+            skipped += 1
         else:
             files_needed.append(sf)
 
     # Dry-run: show what would be fetched, then exit
     if dry_run:
-        messages.extend(f"[dry-run] Would get: {sf.remote_path}" for sf in files_needed)
+        for sf in files_needed:
+            emit(f"[dry-run] Would get: {sf.remote_path}")
         return messages
 
     if not files_needed:
-        messages.append("All files up to date.")
+        emit("All files up to date.")
+        proj_label = f" from {project}" if project else ""
+        emit(f"Done: {len(files_to_get)} file(s) shared{proj_label}. 0 updated, {skipped} unchanged.")
         return messages
 
     # Sparse-checkout only the files that actually changed
+    emit(f"Downloading {len(files_needed)} changed file(s)...")
     needed_paths = [sf.remote_path for sf in files_needed]
     clone_dir, _repo = _sparse_checkout(
         conf.source_repo.url,
@@ -208,19 +230,21 @@ def get_files(
         needed_paths,
     )
 
+    updated = 0
     try:
         for sf in files_needed:
             try:
                 content = _read_clone(clone_dir, sf.remote_path)
             except FileNotFoundError:
-                messages.append(f"WARNING: Remote file not found: {sf.remote_path}")
+                emit(f"WARNING: Remote file not found: {sf.remote_path}")
                 continue
 
             # Write the fetched content to the local destination
             local = cfg.resolve_local_path(root, sf.local_path)
             local.parent.mkdir(parents=True, exist_ok=True)
             local.write_bytes(content)
-            messages.append(f"OK: {sf.remote_path} -> {local.relative_to(root)}")
+            emit(f"OK: {sf.remote_path} -> {local.relative_to(root)}")
+            updated += 1
 
             # Track the blob SHA so we can skip this file next time
             sha = remote_shas.get(sf.remote_path)
@@ -231,6 +255,10 @@ def get_files(
 
     # Persist updated hashes for future runs
     cfg.save_hashes(root, stored_hashes)
+
+    # Summary line
+    proj_label = f" from {project}" if project else ""
+    emit(f"Done: {len(files_to_get)} file(s) shared{proj_label}. {updated} updated, {skipped} unchanged.")
 
     return messages
 
@@ -303,14 +331,22 @@ def push_files(
     _push: Callable[..., None] = git_ops.push_files,
     _detect_identity: Callable[[Path], str] = cfg.detect_repo_identity,
     _fetch_file: Callable[..., bytes | None] = git_ops.fetch_single_file,
+    _print: Callable[[str], None] = _noop_print,
 ) -> List[str]:
     """Push local shared files to the remote repo.
 
     Returns a list of human-readable status messages.
+    *_print* is called immediately for each message (live progress).
     Dependency parameters (prefixed with _) allow test injection.
     """
+    def emit(msg: str) -> None:
+        messages.append(msg)
+        _print(msg)
+
     root = project_root or cfg.find_project_root()
     conf = cfg.load_config(root, project=project)
+
+    messages: List[str] = []
 
     # Resolve central mode if applicable
     conf, resolve_msgs = _resolve_config(
@@ -318,28 +354,25 @@ def push_files(
         _detect_identity=_detect_identity,
         _fetch_file=_fetch_file,
     )
-    messages: List[str] = list(resolve_msgs)
+    for m in resolve_msgs:
+        emit(m)
 
     files_to_push = [f for f in conf.shared_files if f.action == "push"]
 
     # Discover new files eligible for upload (central mode only)
     upload_candidates, upload_msgs = _discover_uploadable_files(root, conf)
-    messages.extend(upload_msgs)
+    for m in upload_msgs:
+        emit(m)
 
     if not files_to_push and not upload_candidates:
-        messages.append("No files with action=push found in shared.json")
+        emit("No files with action=push found in shared.json")
         return messages
 
     if dry_run:
-        messages.extend(
-            f"[dry-run] Would push: {f.local_path} -> {f.remote_path}"
-            for f in files_to_push
-        )
-        # Show upload candidates in dry-run output
-        messages.extend(
-            f"[dry-run] Would upload: {remote_path}"
-            for _, remote_path in upload_candidates
-        )
+        for f in files_to_push:
+            emit(f"[dry-run] Would push: {f.local_path} -> {f.remote_path}")
+        for _, remote_path in upload_candidates:
+            emit(f"[dry-run] Would upload: {remote_path}")
         return messages
 
     # Build the file map: remote_path -> local file bytes
@@ -348,7 +381,7 @@ def push_files(
     for sf in files_to_push:
         local = cfg.resolve_local_path(root, sf.local_path)
         if not local.exists():
-            messages.append(f"WARNING: Local file not found, skipping: {local}")
+            emit(f"WARNING: Local file not found, skipping: {local}")
             continue
         file_map[sf.remote_path] = local.read_bytes()
 
@@ -357,11 +390,12 @@ def push_files(
         file_map[remote_path] = local_file.read_bytes()
 
     if not file_map:
-        messages.append("No files to push (all missing locally).")
+        emit("No files to push (all missing locally).")
         return messages
 
     # Conflict check: verify remote files haven't changed since last pull
     if not force:
+        emit("Checking for conflicts...")
         remote_paths = list(file_map.keys())
         clone_dir = None
         try:
@@ -375,16 +409,14 @@ def push_files(
                 if remote_file.exists():
                     remote_content = remote_file.read_bytes()
                     if remote_content != local_content:
-                        messages.append(
+                        emit(
                             f"CONFLICT: {remote_path} differs on remote. "
                             f"Use --force to overwrite."
                         )
             if any("CONFLICT" in m for m in messages):
-                messages.append("Push aborted due to conflicts. Use --force to overwrite.")
+                emit("Push aborted due to conflicts. Use --force to overwrite.")
                 return messages
         except git_ops.GitError as exc:
-            # If we can't fetch to check conflicts, let the push attempt
-            # handle the error -- log so it's not silently swallowed
             logger.warning("Could not check remote for conflicts: %s", exc)
         finally:
             if clone_dir:
@@ -395,6 +427,7 @@ def push_files(
     branch_name = _current_branch(root)
     commit_msg = f"Updated by {repo_name} on {branch_name}"
 
+    emit(f"Pushing {len(file_map)} file(s) to {conf.source_repo.url}...")
     _push(
         url=conf.source_repo.url,
         branch=conf.source_repo.branch,
@@ -404,7 +437,11 @@ def push_files(
     )
 
     for remote_path in file_map:
-        messages.append(f"OK: pushed {remote_path}")
+        emit(f"OK: pushed {remote_path}")
+
+    # Summary line
+    proj_label = f" to {project}" if project else ""
+    emit(f"Done: {len(file_map)} file(s) pushed{proj_label}.")
 
     return messages
 

@@ -130,7 +130,7 @@ class TestGetDryRunShowsPlannedFiles:
             shared_files=[{"remote_path": "a.md", "local_path": "a.md", "action": "push"}]
         ))
         messages = get_files(project_root=root)
-        assert "No files with action=get" in messages[0]
+        assert any("No files with action=get" in m for m in messages)
 
 
 class TestGetGlobExpandsToConcreteFiles:
