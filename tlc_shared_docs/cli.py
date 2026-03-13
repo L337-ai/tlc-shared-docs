@@ -151,13 +151,14 @@ def main(argv: list[str] | None = None) -> None:
         elif args.command == "get":
             messages = get_files(
                 dry_run=args.dry_run, central_url=args.central,
-                project=args.project, _print=print,
+                project=args.project,
+                _print=lambda m: print(m, flush=True),
             )
         elif args.command == "push":
             messages = push_files(
                 dry_run=args.dry_run, force=args.force,
                 central_url=args.central, project=args.project,
-                _print=print,
+                _print=lambda m: print(m, flush=True),
             )
         else:
             parser.print_help()

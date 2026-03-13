@@ -60,21 +60,36 @@ class SharedConfig:
 _GLOB_CHARS = set("*?[")
 
 
-def glob_match(path: str, pattern: str) -> bool:
-    """Match *path* against a glob *pattern* supporting ``**`` recursion.
-
-    ``fnmatch`` doesn't handle ``**`` as recursive, so we convert the
-    pattern to a regex where ``**/`` matches zero or more directory levels.
-    """
+def _glob_to_regex(pattern: str) -> str:
+    """Convert a glob pattern to a regex string."""
     regex = re.escape(pattern)
-    # re.escape turns * into \*, ** into \*\*
     regex = regex.replace(r"\*\*/", "<<GLOBSTAR_SLASH>>")
     regex = regex.replace(r"\*\*", "<<GLOBSTAR>>")
     regex = regex.replace(r"\*", r"[^/]*")
     regex = regex.replace(r"\?", r"[^/]")
     regex = regex.replace("<<GLOBSTAR_SLASH>>", r"([^/]+/)*")
     regex = regex.replace("<<GLOBSTAR>>", r".*")
-    return bool(re.fullmatch(regex, path))
+    return regex
+
+
+def glob_match(path: str, pattern: str) -> bool:
+    """Match *path* against a glob *pattern* supporting ``**`` recursion.
+
+    Handles ``**/`` as zero-or-more directory levels. To guarantee the
+    zero-dirs case works, patterns containing ``**/`` are also tested
+    with ``**/`` collapsed (e.g. ``stories/**/*.md`` also tries
+    ``stories/*.md``).
+    """
+    if re.fullmatch(_glob_to_regex(pattern), path):
+        return True
+
+    # Belt-and-suspenders: also try with each **/ collapsed one at a time
+    if "**/" in pattern:
+        collapsed = pattern.replace("**/", "", 1)
+        if re.fullmatch(_glob_to_regex(collapsed), path):
+            return True
+
+    return False
 
 
 def is_glob(path: str) -> bool:
