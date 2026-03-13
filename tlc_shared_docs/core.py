@@ -172,6 +172,10 @@ def get_files(
     for m in resolve_msgs:
         emit(m)
 
+    # Central mode replaces shared_files, so re-apply project prefix
+    if project and conf.mode == "central":
+        conf = cfg._prefix_local_paths(conf, project)
+
     # Expand any glob patterns into concrete file entries
     emit(f"Fetching file list from {conf.source_repo.url}...")
     files_to_get, expand_msgs = _expand_get_entries(conf, _list_remote=_list_remote)
@@ -356,6 +360,10 @@ def push_files(
     )
     for m in resolve_msgs:
         emit(m)
+
+    # Central mode replaces shared_files, so re-apply project prefix
+    if project and conf.mode == "central":
+        conf = cfg._prefix_local_paths(conf, project)
 
     files_to_push = [f for f in conf.shared_files if f.action == "push"]
 
