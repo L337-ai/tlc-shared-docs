@@ -1,18 +1,18 @@
 """Claude agent skill content for tlc-shared-docs.
 
 Each skill targets a specific role:
-- ``central``: For architecture/shared-docs repos that control consumer configs
-- Future: ``consumer`` for repos that consume shared docs
+- ``player1``: For architecture/shared-docs repos that control consumer configs
+- Future: ``player2`` for repos that consume shared docs
 """
 
 # Each skill is (filename, content, claude_md_stub)
 SKILLS: dict[str, tuple[str, str, str]] = {}
 
 # ---------------------------------------------------------------------------
-# Central repo skill — for the architecture repo that owns .configs/
+# Player 1 skill — for the architecture repo that owns .configs/
 # ---------------------------------------------------------------------------
 
-_CENTRAL_STUB = """\
+_PLAYER1_STUB = """\
 
 ## tlc-shared-docs (central repo)
 
@@ -21,10 +21,10 @@ consumer repos via `tlc-shared-docs`.
 
 When the user mentions shared docs, shared documents, shared-docs, shared files,
 document sharing, doc sharing, `.configs/`, consumer configs, or `tlc-shared-docs`,
-read `.claude/tlc-shared-docs-central.md` for detailed instructions before proceeding.
+read `.claude/tlc-shared-docs-player1.md` for detailed instructions before proceeding.
 """
 
-SKILLS["central"] = ("tlc-shared-docs-central.md", """\
+SKILLS["player1"] = ("tlc-shared-docs-player1.md", """\
 # tlc-shared-docs — Central Repo Agent Instructions
 
 This is an **architecture repo** (central repo) that distributes shared
@@ -199,4 +199,4 @@ Add an `uploads` section:
 ```bash
 grep -r "architecture.md" .configs/
 ```
-""", _CENTRAL_STUB)
+""", _PLAYER1_STUB)

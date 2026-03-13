@@ -282,16 +282,16 @@ If you use [Claude Code](https://claude.com/claude-code) or other Claude-based a
 
 | Skill | For | Description |
 |---|---|---|
-| `central` | Architecture repos | Teaches Claude how to manage `.configs/`, onboard consumers, and maintain shared docs |
+| `player1` | Architecture repos | Teaches Claude how to manage `.configs/`, onboard consumers, and maintain shared docs |
 
 #### Installing a skill
 
 ```bash
-tlc-shared-docs init --skill central
+tlc-shared-docs init --skill player1
 ```
 
 This does two things:
-1. Writes the full skill instructions to `.claude/tlc-shared-docs-central.md`
+1. Writes the full skill instructions to `.claude/tlc-shared-docs-player1.md`
 2. Appends a reference block to `CLAUDE.md` so Claude automatically discovers the skill when you mention shared docs, document sharing, `.configs/`, or `tlc-shared-docs`
 
 The `CLAUDE.md` reference is idempotent — running `init` again won't duplicate it.

@@ -29,7 +29,7 @@ commands:
   list  List available projects defined in shared.json
 
   init  Install a Claude agent skill file into this repo
-        --skill NAME           Skill to install (central, consumer, ...)
+        --skill NAME           Skill to install (player1, player2, ...)
 
 examples:
   tlc-shared-docs list                      Show available projects
@@ -37,7 +37,7 @@ examples:
   tlc-shared-docs get --dry-run             Preview what would be fetched
   tlc-shared-docs push --force              Push and overwrite remote changes
   tlc-shared-docs push -p auth --dry-run    Preview push for a project
-  tlc-shared-docs init --skill central     Install Claude skill for arch repos
+  tlc-shared-docs init --skill player1     Install Claude skill for arch repos
 """
 
 
