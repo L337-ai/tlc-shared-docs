@@ -147,6 +147,12 @@ For example, to version-control `getting-started.md` and everything under `guide
 
 This is useful when your team wants certain shared docs to appear in your repo's git history — for example, files that are reviewed during PRs or that tools like GitHub Pages need to find in the repository.
 
+### Central mode
+
+Central mode lets an architecture repo control what documentation each consumer repo receives. The consumer's `shared.json` just points at the source repo with `"mode": "central"` — the architecture repo decides the rest.
+
+> **Setting up central mode?** See [README_CENTRAL.md](README_CENTRAL.md) for a detailed walkthrough covering architecture repo setup, per-consumer config files, identity detection, permissions, and the full end-to-end flow.
+
 ### Auto-uploading new files (central mode)
 
 When running in **central mode**, consumer repos can automatically upload new files to the shared repo. The central config controls which paths are allowed:
