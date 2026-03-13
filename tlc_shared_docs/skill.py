@@ -144,15 +144,22 @@ Each file defines what that consumer can get and push:
 | `uploads.allowed` | Whether the consumer can upload new files |
 | `uploads.paths` | Glob patterns restricting where new uploads may land |
 
-### local_path behavior
+### local_path and project-id prefixing
 
 On the consumer side, files are auto-isolated into a project subdirectory.
 If the consumer's `shared.json` uses multi-project mode with project name
 `agent-coder`, a file with `"local_path": "guide.md"` lands at
 `docs/source/shared/agent-coder/guide.md` on their side.
 
-You do NOT need to prefix `local_path` with the project name — that happens
-automatically on the consumer side.
+**Prefixing is automatic and idempotent.** The tool prepends the project
+name to `local_path` UNLESS it already starts with the project name. Both
+of these produce identical results on the consumer side:
+
+- `"local_path": "guide.md"` -> `agent-coder/guide.md` (auto-prefixed)
+- `"local_path": "agent-coder/guide.md"` -> `agent-coder/guide.md` (already prefixed, skipped)
+
+**Best practice:** Use short paths like `"guide.md"` and let the tool
+prefix automatically. Only use the full path if you need to be explicit.
 
 ### Glob patterns in remote_path
 
@@ -310,7 +317,8 @@ understand which projects and sources are configured.
 
 ## Where shared files live
 
-In multi-project mode, files are auto-isolated into subdirectories:
+In multi-project mode, files are auto-isolated into subdirectories
+named after the project-id:
 
 ```
 docs/source/shared/
@@ -323,6 +331,19 @@ docs/source/shared/
 ```
 
 In single-source mode, files land directly under `docs/source/shared/`.
+
+### Project-id prefixing
+
+The tool automatically prepends the project name to each file's
+`local_path`. This happens idempotently — if the central config
+already includes the project name in the path (e.g.,
+`"local_path": "agent-coder/guide.md"`), it will NOT double-prefix.
+Both `"guide.md"` and `"agent-coder/guide.md"` resolve to
+`docs/source/shared/agent-coder/guide.md`.
+
+**When referencing shared files in this repo, always use the full
+path including the project subdirectory** (e.g.,
+`docs/source/shared/agent-coder/guide.md`).
 
 ---
 
