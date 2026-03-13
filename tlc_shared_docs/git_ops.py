@@ -182,8 +182,12 @@ def push_files(
             dest = clone_dir / remote_path
             dest.parent.mkdir(parents=True, exist_ok=True)
 
-            # Compute the blob SHA git would assign to the new content
-            new_sha = repo.git.hash_object("--stdin", input=content)
+            # Compute the blob SHA git would assign to the new content.
+            # Write to a temp file because GitPython can't pipe binary to stdin.
+            hash_tmp = clone_dir / ".hash_tmp"
+            hash_tmp.write_bytes(content)
+            new_sha = repo.git.hash_object(str(hash_tmp))
+            hash_tmp.unlink()
             old_sha = existing_shas.get(remote_path)
 
             vlog(f"[verbose] {remote_path}: old_sha={old_sha} new_sha={new_sha} local_bytes={len(content)}")
