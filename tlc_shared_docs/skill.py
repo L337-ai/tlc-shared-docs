@@ -207,6 +207,11 @@ You can use wildcards for `get` actions:
    `tlc-shared-docs get`, they receive the updated file list. There is no
    deploy step.
 
+9. **Removing files from a consumer's list** does not delete them on the
+   consumer side. Old files remain until the consumer runs
+   `tlc-shared-docs get --clean`. Tell consumers to use `--clean` after
+   you remove entries from their config.
+
 ---
 
 ## Common tasks
@@ -360,6 +365,10 @@ tlc-shared-docs get -p agent-coder
 # Preview before pulling
 tlc-shared-docs get --dry-run
 
+# Remove stale files no longer in the share list
+tlc-shared-docs get --clean
+tlc-shared-docs get -p agent-coder --clean --dry-run
+
 # Push changes back to the architecture repo
 tlc-shared-docs push
 tlc-shared-docs push --force
@@ -404,6 +413,13 @@ tlc-shared-docs push --dry-run
    repo gets. If the user wants access to a new file, tell them to update
    the consumer config in the architecture repo.
 
+10. **Use `--clean` to remove stale files.** If the architecture repo
+    removes files from the share list, old copies stay on disk. Run
+    `tlc-shared-docs get --clean` to delete files that are no longer in
+    the current share list. Use `--clean --dry-run` to preview first.
+    Only files in the project subdirectory are scanned; internal files
+    and other projects are never touched.
+
 ---
 
 ## Common tasks
@@ -412,6 +428,13 @@ tlc-shared-docs push --dry-run
 
 ```bash
 tlc-shared-docs get -p <project-name>
+```
+
+### Clean up stale files
+
+```bash
+tlc-shared-docs get -p <project-name> --clean --dry-run   # preview
+tlc-shared-docs get -p <project-name> --clean              # delete stale files
 ```
 
 ### Check what's available

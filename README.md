@@ -64,6 +64,23 @@ tlc-shared-docs get --dry-run
 tlc-shared-docs push --dry-run
 ```
 
+### 5. Clean up stale files
+
+If the central repo removes files from your share list, the old copies remain on disk. Use `--clean` to remove them:
+
+```bash
+# Remove files no longer in the share list
+tlc-shared-docs get --clean
+
+# Preview what would be removed
+tlc-shared-docs get --clean --dry-run
+
+# Combine with project selection
+tlc-shared-docs get -p agent-coder --clean
+```
+
+With `--clean`, only files inside the project subdirectory (or shared root for legacy configs) are scanned. Internal files (`.gitignore`, `shared.json`, `.shared-hashes.json`) are never removed.
+
 ## Configuration Reference
 
 ### `shared.json`

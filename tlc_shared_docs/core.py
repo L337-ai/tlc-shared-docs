@@ -138,6 +138,7 @@ def get_files(
     dry_run: bool = False,
     central_url: Optional[str] = None,
     project: Optional[str] = None,
+    clean: bool = False,
     _get_shas: Callable[..., dict[str, str]] = git_ops.get_remote_blob_shas,
     _sparse_checkout: Callable[..., tuple] = git_ops.sparse_checkout_files,
     _read_clone: Callable[..., bytes] = git_ops.read_file_from_clone,
@@ -181,88 +182,120 @@ def get_files(
     files_to_get, expand_msgs = _expand_get_entries(conf, _list_remote=_list_remote)
     for m in expand_msgs:
         emit(m)
-    if not files_to_get:
-        if len(messages) <= 1:
-            emit("No files with action=get found in shared.json")
-        return messages
 
-    remote_paths = [f.remote_path for f in files_to_get]
-
-    # Query remote blob SHAs to detect unchanged files (cheap, no blobs)
-    emit(f"Checking for changes ({len(remote_paths)} file(s))...")
-    stored_hashes = cfg.load_hashes(root)
-    remote_shas = _get_shas(
-        conf.source_repo.url,
-        conf.source_repo.branch,
-        remote_paths,
-    )
-
-    # Filter: only fetch files whose SHA changed or that don't exist locally
     files_needed: List[cfg.SharedFile] = []
     skipped = 0
-    for sf in files_to_get:
-        remote_sha = remote_shas.get(sf.remote_path)
-        if remote_sha is None:
-            files_needed.append(sf)
-            continue
-        stored_sha = stored_hashes.get(sf.remote_path)
-        local = cfg.resolve_local_path(root, sf.local_path)
-        if stored_sha == remote_sha and local.exists():
-            emit(f"SKIP (unchanged): {sf.remote_path}")
-            skipped += 1
-        else:
-            files_needed.append(sf)
-
-    # Dry-run: show what would be fetched, then exit
-    if dry_run:
-        for sf in files_needed:
-            emit(f"[dry-run] Would get: {sf.remote_path}")
-        return messages
-
-    if not files_needed:
-        emit("All files up to date.")
-        proj_label = f" from {project}" if project else ""
-        emit(f"Done: {len(files_to_get)} file(s) shared{proj_label}. 0 updated, {skipped} unchanged.")
-        return messages
-
-    # Sparse-checkout only the files that actually changed
-    emit(f"Downloading {len(files_needed)} changed file(s)...")
-    needed_paths = [sf.remote_path for sf in files_needed]
-    clone_dir, _repo = _sparse_checkout(
-        conf.source_repo.url,
-        conf.source_repo.branch,
-        needed_paths,
-    )
-
     updated = 0
-    try:
-        for sf in files_needed:
-            try:
-                content = _read_clone(clone_dir, sf.remote_path)
-            except FileNotFoundError:
-                emit(f"WARNING: Remote file not found: {sf.remote_path}")
+
+    if not files_to_get:
+        if not clean:
+            if len(messages) <= 1:
+                emit("No files with action=get found in shared.json")
+            return messages
+        # With --clean, continue even with no get entries (to remove stale files)
+    else:
+        remote_paths = [f.remote_path for f in files_to_get]
+
+        # Query remote blob SHAs to detect unchanged files (cheap, no blobs)
+        emit(f"Checking for changes ({len(remote_paths)} file(s))...")
+        stored_hashes = cfg.load_hashes(root)
+        remote_shas = _get_shas(
+            conf.source_repo.url,
+            conf.source_repo.branch,
+            remote_paths,
+        )
+
+        # Filter: only fetch files whose SHA changed or that don't exist locally
+        for sf in files_to_get:
+            remote_sha = remote_shas.get(sf.remote_path)
+            if remote_sha is None:
+                files_needed.append(sf)
                 continue
-
-            # Write the fetched content to the local destination
+            stored_sha = stored_hashes.get(sf.remote_path)
             local = cfg.resolve_local_path(root, sf.local_path)
-            local.parent.mkdir(parents=True, exist_ok=True)
-            local.write_bytes(content)
-            emit(f"OK: {sf.remote_path} -> {local.relative_to(root)}")
-            updated += 1
+            if stored_sha == remote_sha and local.exists():
+                emit(f"SKIP (unchanged): {sf.remote_path}")
+                skipped += 1
+            else:
+                files_needed.append(sf)
 
-            # Track the blob SHA so we can skip this file next time
-            sha = remote_shas.get(sf.remote_path)
-            if sha:
-                stored_hashes[sf.remote_path] = sha
-    finally:
-        _cleanup(clone_dir)
+        # Dry-run: show what would be fetched (but don't return yet — clean may follow)
+        if dry_run:
+            for sf in files_needed:
+                emit(f"[dry-run] Would get: {sf.remote_path}")
 
-    # Persist updated hashes for future runs
-    cfg.save_hashes(root, stored_hashes)
+    if dry_run:
+        pass  # skip download in dry-run mode
+    elif not files_needed:
+        if files_to_get:
+            emit("All files up to date.")
+    else:
+        # Sparse-checkout only the files that actually changed
+        emit(f"Downloading {len(files_needed)} changed file(s)...")
+        needed_paths = [sf.remote_path for sf in files_needed]
+        clone_dir, _repo = _sparse_checkout(
+            conf.source_repo.url,
+            conf.source_repo.branch,
+            needed_paths,
+        )
+
+        try:
+            for sf in files_needed:
+                try:
+                    content = _read_clone(clone_dir, sf.remote_path)
+                except FileNotFoundError:
+                    emit(f"WARNING: Remote file not found: {sf.remote_path}")
+                    continue
+
+                # Write the fetched content to the local destination
+                local = cfg.resolve_local_path(root, sf.local_path)
+                local.parent.mkdir(parents=True, exist_ok=True)
+                local.write_bytes(content)
+                emit(f"OK: {sf.remote_path} -> {local.relative_to(root)}")
+                updated += 1
+
+                # Track the blob SHA so we can skip this file next time
+                sha = remote_shas.get(sf.remote_path)
+                if sha:
+                    stored_hashes[sf.remote_path] = sha
+        finally:
+            _cleanup(clone_dir)
+
+        # Persist updated hashes for future runs
+        cfg.save_hashes(root, stored_hashes)
+
+    # Clean: remove local files not in the current shared_files list
+    cleaned = 0
+    if clean:
+        # Build set of expected local paths from all get entries
+        expected_locals: set[Path] = set()
+        for sf in files_to_get:
+            expected_locals.add(cfg.resolve_local_path(root, sf.local_path))
+
+        # Determine the scan directory (project subdir or shared root)
+        sdir = cfg.shared_dir_path(root)
+        scan_dir = sdir / project if project else sdir
+        internal = {".gitignore", "shared.json", ".shared-hashes.json"}
+
+        if scan_dir.is_dir():
+            for local_file in scan_dir.rglob("*"):
+                if not local_file.is_file():
+                    continue
+                rel = local_file.relative_to(sdir).as_posix()
+                if rel in internal:
+                    continue
+                if local_file not in expected_locals:
+                    if dry_run:
+                        emit(f"[dry-run] Would remove: {local_file.relative_to(root)}")
+                    else:
+                        local_file.unlink()
+                        emit(f"REMOVED: {local_file.relative_to(root)}")
+                    cleaned += 1
 
     # Summary line
     proj_label = f" from {project}" if project else ""
-    emit(f"Done: {len(files_to_get)} file(s) shared{proj_label}. {updated} updated, {skipped} unchanged.")
+    clean_label = f", {cleaned} removed" if clean else ""
+    emit(f"Done: {len(files_to_get)} file(s) shared{proj_label}. {updated} updated, {skipped} unchanged{clean_label}.")
 
     return messages
 

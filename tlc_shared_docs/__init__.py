@@ -1,3 +1,3 @@
 """tlc-shared-docs: Share documentation files between Git repositories."""
 
-__version__ = "1.1.0022"
+__version__ = "1.1.0023"

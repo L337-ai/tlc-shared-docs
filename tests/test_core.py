@@ -369,6 +369,122 @@ class TestSkipUnchangedFiles:
 # ===========================================================================
 
 
+class TestCleanRemovesStaleFiles:
+    """Tests for --clean flag removing files no longer in the share list."""
+
+    def test_clean_removes_file_not_in_shared_files(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, _make_config(
+            shared_files=[{"remote_path": "keep.md", "local_path": "keep.md", "action": "get"}]
+        ))
+        # Both files exist locally, but only keep.md is in shared_files
+        (shared_dir / "keep.md").write_text("kept")
+        (shared_dir / "stale.md").write_text("should be removed")
+
+        stub = StubGitOps(
+            remote_shas={"keep.md": "sha1"},
+            sparse_files={"keep.md": b"kept"},
+        )
+        messages = get_files(
+            project_root=root, clean=True,
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+        )
+        assert not (shared_dir / "stale.md").exists()
+        assert (shared_dir / "keep.md").exists()
+        assert any("REMOVED" in m and "stale.md" in m for m in messages)
+
+    def test_clean_preserves_internal_files(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, _make_config(shared_files=[]))
+        (shared_dir / ".gitignore").write_text("*")
+        (shared_dir / ".shared-hashes.json").write_text("{}")
+
+        stub = StubGitOps()
+        get_files(project_root=root, clean=True)
+
+        assert (shared_dir / ".gitignore").exists()
+        assert (shared_dir / "shared.json").exists()
+        assert (shared_dir / ".shared-hashes.json").exists()
+
+    def test_clean_dry_run_shows_would_remove(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, _make_config(shared_files=[]))
+        (shared_dir / "orphan.md").write_text("orphaned file")
+
+        messages = get_files(project_root=root, dry_run=True, clean=True)
+        assert (shared_dir / "orphan.md").exists()  # not deleted in dry-run
+        assert any("[dry-run] Would remove:" in m and "orphan.md" in m for m in messages)
+
+    def test_clean_scopes_to_project_subdirectory(self, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "alpha": {
+                    "source_repo": {"url": "https://example.com/alpha.git"},
+                    "shared_files": [
+                        {"remote_path": "doc.md", "local_path": "doc.md", "action": "get"}
+                    ],
+                },
+            },
+        }
+        _write_config(shared_dir, config)
+
+        # Create files in alpha/ and a sibling directory
+        (shared_dir / "alpha").mkdir()
+        (shared_dir / "alpha" / "doc.md").write_text("kept")
+        (shared_dir / "alpha" / "stale.md").write_text("should go")
+        (shared_dir / "other").mkdir()
+        (shared_dir / "other" / "safe.md").write_text("not touched")
+
+        stub = StubGitOps(
+            remote_shas={"doc.md": "sha1"},
+            sparse_files={"doc.md": b"kept"},
+        )
+        messages = get_files(
+            project_root=root, project="alpha", clean=True,
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+        )
+        assert not (shared_dir / "alpha" / "stale.md").exists()
+        assert (shared_dir / "alpha" / "doc.md").exists()
+        assert (shared_dir / "other" / "safe.md").exists()  # untouched
+
+    def test_no_clean_leaves_stale_files(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, _make_config(
+            shared_files=[{"remote_path": "keep.md", "local_path": "keep.md", "action": "get"}]
+        ))
+        (shared_dir / "keep.md").write_text("kept")
+        (shared_dir / "stale.md").write_text("should stay without --clean")
+
+        stub = StubGitOps(
+            remote_shas={"keep.md": "sha1"},
+            sparse_files={"keep.md": b"kept"},
+        )
+        get_files(
+            project_root=root,
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+        )
+        assert (shared_dir / "stale.md").exists()
+
+    def test_summary_includes_removed_count(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, _make_config(shared_files=[]))
+        (shared_dir / "old1.md").write_text("x")
+        (shared_dir / "old2.md").write_text("y")
+
+        messages = get_files(project_root=root, clean=True)
+        assert any("2 removed" in m for m in messages)
+
+
 class TestPushDryRunShowsPlannedFiles:
     def test_dry_run_lists_files_to_push(self, fake_project):
         root, shared_dir = fake_project

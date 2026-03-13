@@ -17,6 +17,7 @@ _EPILOG = """\
 commands:
   get   Pull shared files from the remote repo
         --dry-run              Preview without making changes
+        --clean                Remove local files no longer in the share list
         --central URL          Fetch config from a central repo URL
         -p, --project NAME     Select a named project (multi-project configs)
 
@@ -71,6 +72,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "-p", "--project",
         default=None,
         help="Select a named project from shared.json (multi-project configs)",
+    )
+    get_parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Remove local files no longer in the shared_files list",
     )
 
     # --- push: push local shared files to the remote repo ---
@@ -151,7 +157,7 @@ def main(argv: list[str] | None = None) -> None:
         elif args.command == "get":
             messages = get_files(
                 dry_run=args.dry_run, central_url=args.central,
-                project=args.project,
+                project=args.project, clean=args.clean,
                 _print=lambda m: print(m, flush=True),
             )
         elif args.command == "push":
