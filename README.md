@@ -283,28 +283,41 @@ If you use [Claude Code](https://claude.com/claude-code) or other Claude-based a
 | Skill | For | Description |
 |---|---|---|
 | `player1` | Architecture repos | Teaches Claude how to manage `.configs/`, onboard consumers, and maintain shared docs |
+| `player2` | Consumer repos | Teaches Claude how to pull/push shared docs, use `--dry-run`, and contribute new files |
+
+You can install both in the same repo if it acts as both an architecture repo and a consumer.
 
 #### Installing a skill
 
 ```bash
+# For architecture repos (central/source of shared docs)
 tlc-shared-docs init --skill player1
+
+# For consumer repos (pull/push shared docs from an arch repo)
+tlc-shared-docs init --skill player2
+
+# Both can coexist in the same repo
+tlc-shared-docs init --skill player1
+tlc-shared-docs init --skill player2
 ```
 
 This does two things:
-1. Writes the full skill instructions to `.claude/tlc-shared-docs-player1.md`
-2. Appends a reference block to `CLAUDE.md` so Claude automatically discovers the skill when you mention shared docs, document sharing, `.configs/`, or `tlc-shared-docs`
+1. Writes the skill instructions to `.claude/tlc-shared-docs-<skill>.md`
+2. Adds a generic reference block to `CLAUDE.md` (with HTML comment markers) that directs Claude to read all installed skill files
 
-The `CLAUDE.md` reference is idempotent — running `init` again won't duplicate it.
+Re-running `init` always overwrites the skill file with the latest content and replaces the `CLAUDE.md` block in-place — safe to run repeatedly.
 
 #### When does Claude use the skill?
 
-Claude reads `CLAUDE.md` at the start of every conversation. The reference block tells it to read the full skill file whenever you mention:
+Claude reads `CLAUDE.md` at the start of every conversation. The reference block tells it to read all `.claude/tlc-shared-docs-*.md` files whenever you mention:
 - shared docs / shared documents / shared files
-- document sharing / doc sharing
-- `.configs/` or consumer configs
+- document sharing / doc sharing / doc sync
+- `.configs/` / consumer configs / architecture docs
 - `tlc-shared-docs`
 
 No special syntax needed — just talk naturally about shared docs and Claude will know what to do.
+
+If both player1 and player2 are installed, Claude reads both and asks for clarification when it's ambiguous whether you mean docs managed by this repo or consumed from a remote.
 
 ## Requirements
 
