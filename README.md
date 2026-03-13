@@ -222,6 +222,9 @@ Each project entry supports the same fields as the legacy single-source format (
 #### Usage
 
 ```bash
+# See what projects are available
+tlc-shared-docs list
+
 # Pull docs for a specific project
 tlc-shared-docs get --project agent-coder
 tlc-shared-docs get -p auth
@@ -232,6 +235,8 @@ tlc-shared-docs get
 # Push works the same way
 tlc-shared-docs push -p events --dry-run
 ```
+
+The `list` command shows all available projects with their source URLs, branches, and modes — useful when you don't know the exact project name.
 
 | Field | Description |
 |---|---|

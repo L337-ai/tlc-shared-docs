@@ -452,6 +452,47 @@ class TestCLI:
         with pytest.raises(SystemExit):
             main([])
 
+    def test_list_shows_projects(self, fake_project, capsys):
+        from tlc_shared_docs.cli import main
+
+        root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "auth": {"source_repo": {"url": "https://example.com/auth.git"}, "mode": "central"},
+                "agent": {"source_repo": {"url": "https://example.com/agent.git"}},
+            },
+            "default_project": "agent",
+        }
+        _write_config(shared_dir, config)
+
+        import tlc_shared_docs.config as cfg_mod
+        original_find = cfg_mod.find_project_root
+        cfg_mod.find_project_root = lambda start=None: root
+        try:
+            main(["list"])
+        finally:
+            cfg_mod.find_project_root = original_find
+
+        output = capsys.readouterr().out
+        assert "agent (default)" in output
+        assert "auth" in output
+        assert "example.com/auth.git" in output
+
+    def test_list_legacy_config(self, configured_project, capsys):
+        from tlc_shared_docs.cli import main
+
+        root, _ = configured_project
+        import tlc_shared_docs.config as cfg_mod
+        original_find = cfg_mod.find_project_root
+        cfg_mod.find_project_root = lambda start=None: root
+        try:
+            main(["list"])
+        finally:
+            cfg_mod.find_project_root = original_find
+
+        output = capsys.readouterr().out
+        assert "Single-source config" in output
+
     def test_version_flag_exits_cleanly(self):
         from tlc_shared_docs.cli import main
         with pytest.raises(SystemExit) as exc_info:

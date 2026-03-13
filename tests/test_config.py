@@ -18,6 +18,7 @@ from tlc_shared_docs.config import (
     find_project_root,
     glob_prefix,
     is_glob,
+    list_projects,
     load_config,
     load_hashes,
     parse_upload_config,
@@ -411,3 +412,39 @@ class TestValidateProjectName:
 
         with pytest.raises(ValueError, match="Invalid project name"):
             load_config(root, project="../escape")
+
+
+class TestListProjects:
+    def test_lists_all_projects_sorted(self, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "events": {"source_repo": {"url": "https://example.com/events.git", "branch": "dev"}, "mode": "central"},
+                "auth": {"source_repo": {"url": "https://example.com/auth.git"}, "mode": "central"},
+                "agent": {"source_repo": {"url": "https://example.com/agent.git"}},
+            },
+            "default_project": "agent",
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        result = list_projects(root)
+        assert len(result) == 3
+        # Sorted alphabetically
+        assert result[0]["name"] == "agent (default)"
+        assert result[1]["name"] == "auth"
+        assert result[2]["name"] == "events"
+        # Fields populated correctly
+        assert result[0]["url"] == "https://example.com/agent.git"
+        assert result[0]["branch"] == "main"
+        assert result[0]["mode"] == "local"
+        assert result[2]["branch"] == "dev"
+        assert result[2]["mode"] == "central"
+
+    def test_returns_empty_for_legacy_config(self, configured_project):
+        root, _ = configured_project
+        assert list_projects(root) == []
+
+    def test_raises_when_no_config(self, fake_project):
+        root, _ = fake_project
+        with pytest.raises(FileNotFoundError):
+            list_projects(root)

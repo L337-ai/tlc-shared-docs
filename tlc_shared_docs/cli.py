@@ -6,6 +6,7 @@ import argparse
 import sys
 
 from tlc_shared_docs import __version__
+import tlc_shared_docs.config as cfg
 from tlc_shared_docs.core import get_files, push_files
 
 
@@ -63,6 +64,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Select a named project from shared.json (multi-project configs)",
     )
 
+    # --- list: show available projects ---
+    sub.add_parser("list", help="List available projects in shared.json")
+
     return parser
 
 
@@ -78,7 +82,15 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         # Dispatch to the correct command handler
-        if args.command == "get":
+        if args.command == "list":
+            projects = cfg.list_projects(cfg.find_project_root())
+            if not projects:
+                print("Single-source config (no named projects).")
+            else:
+                for p in projects:
+                    print(f"  {p['name']}  {p['url']}  ({p['branch']}, {p['mode']})")
+            return
+        elif args.command == "get":
             messages = get_files(
                 dry_run=args.dry_run, central_url=args.central, project=args.project,
             )

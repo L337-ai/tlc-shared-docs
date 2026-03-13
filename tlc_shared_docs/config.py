@@ -283,6 +283,35 @@ def _parse_project_entry(data: dict) -> SharedConfig:
     )
 
 
+def list_projects(project_root: Path) -> List[dict[str, str]]:
+    """Return summary info for each project in a multi-project config.
+
+    Each entry is ``{"name": ..., "url": ..., "branch": ..., "mode": ...}``.
+    Returns an empty list for legacy single-source configs.
+    """
+    cfg_path = config_path(project_root)
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"Config not found: {cfg_path}")
+
+    data = json.loads(cfg_path.read_text(encoding="utf-8"))
+
+    if "projects" not in data:
+        return []
+
+    default = data.get("default_project", "")
+    result: List[dict[str, str]] = []
+    for name, entry in sorted(data["projects"].items()):
+        repo = entry.get("source_repo", {})
+        marker = " (default)" if name == default else ""
+        result.append({
+            "name": f"{name}{marker}",
+            "url": repo.get("url", ""),
+            "branch": repo.get("branch", "main"),
+            "mode": entry.get("mode", "local"),
+        })
+    return result
+
+
 def load_config(project_root: Path, project: Optional[str] = None) -> SharedConfig:
     """Read and parse shared.json from the project's shared directory.
 
