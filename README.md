@@ -274,6 +274,38 @@ Project names must be valid folder names: alphanumerics, hyphens, underscores, a
 
 > **Backward compatibility:** The legacy single-source format (with `source_repo` at the root) still works exactly as before — no prefixing, no migration needed.
 
+### Claude agent skills
+
+If you use [Claude Code](https://claude.com/claude-code) or other Claude-based agents, you can install a skill file that teaches the agent how to work with `tlc-shared-docs` in your repo.
+
+#### Available skills
+
+| Skill | For | Description |
+|---|---|---|
+| `central` | Architecture repos | Teaches Claude how to manage `.configs/`, onboard consumers, and maintain shared docs |
+
+#### Installing a skill
+
+```bash
+tlc-shared-docs init --skill central
+```
+
+This does two things:
+1. Writes the full skill instructions to `.claude/tlc-shared-docs-central.md`
+2. Appends a reference block to `CLAUDE.md` so Claude automatically discovers the skill when you mention shared docs, document sharing, `.configs/`, or `tlc-shared-docs`
+
+The `CLAUDE.md` reference is idempotent — running `init` again won't duplicate it.
+
+#### When does Claude use the skill?
+
+Claude reads `CLAUDE.md` at the start of every conversation. The reference block tells it to read the full skill file whenever you mention:
+- shared docs / shared documents / shared files
+- document sharing / doc sharing
+- `.configs/` or consumer configs
+- `tlc-shared-docs`
+
+No special syntax needed — just talk naturally about shared docs and Claude will know what to do.
+
 ## Requirements
 
 - Python 3.9+

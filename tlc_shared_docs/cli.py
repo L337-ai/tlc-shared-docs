@@ -5,9 +5,12 @@ from __future__ import annotations
 import argparse
 import sys
 
+from pathlib import Path
+
 from tlc_shared_docs import __version__
 import tlc_shared_docs.config as cfg
 from tlc_shared_docs.core import get_files, push_files
+from tlc_shared_docs.skill import SKILLS
 
 
 _EPILOG = """\
@@ -25,12 +28,16 @@ commands:
 
   list  List available projects defined in shared.json
 
+  init  Install a Claude agent skill file into this repo
+        --skill NAME           Skill to install (central, consumer, ...)
+
 examples:
   tlc-shared-docs list                      Show available projects
   tlc-shared-docs get -p agent-coder        Pull docs for a specific project
   tlc-shared-docs get --dry-run             Preview what would be fetched
   tlc-shared-docs push --force              Push and overwrite remote changes
   tlc-shared-docs push -p auth --dry-run    Preview push for a project
+  tlc-shared-docs init --skill central     Install Claude skill for arch repos
 """
 
 
@@ -93,6 +100,18 @@ def _build_parser() -> argparse.ArgumentParser:
     # --- list: show available projects ---
     sub.add_parser("list", help="List available projects in shared.json")
 
+    # --- init: install Claude agent skill files ---
+    init_parser = sub.add_parser(
+        "init", help="Install a Claude agent skill file into this repo",
+    )
+    available_skills = ", ".join(sorted(SKILLS.keys()))
+    init_parser.add_argument(
+        "--skill",
+        required=True,
+        choices=sorted(SKILLS.keys()),
+        help=f"Which skill to install ({available_skills})",
+    )
+
     return parser
 
 
@@ -108,7 +127,27 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         # Dispatch to the correct command handler
-        if args.command == "list":
+        if args.command == "init":
+            filename, content, claude_stub = SKILLS[args.skill]
+            root = cfg.find_project_root()
+
+            # Write the full skill file to .claude/
+            dest = root / ".claude" / filename
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content, encoding="utf-8")
+            print(f"Installed: {dest.relative_to(root)}")
+
+            # Append the reference stub to CLAUDE.md if not already present
+            claude_md = root / "CLAUDE.md"
+            existing = claude_md.read_text(encoding="utf-8") if claude_md.exists() else ""
+            if filename not in existing:
+                with open(claude_md, "a", encoding="utf-8") as f:
+                    f.write(claude_stub)
+                print(f"Updated:   CLAUDE.md (added reference to {filename})")
+            else:
+                print(f"Skipped:   CLAUDE.md (already references {filename})")
+            return
+        elif args.command == "list":
             projects = cfg.list_projects(cfg.find_project_root())
             if not projects:
                 print("Single-source config (no named projects).")
