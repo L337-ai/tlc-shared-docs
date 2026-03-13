@@ -662,6 +662,24 @@ class TestDiscoverUploadableFiles:
             uploads=UploadConfig(allowed=True, paths=paths),
         )
 
+    def test_globstar_matches_zero_intermediate_segments(self, fake_project):
+        """stories/**/*.md must match stories/base.md (zero dirs) and stories/sub/deep.md."""
+        root, shared_dir = fake_project
+        stories = shared_dir / "stories"
+        stories.mkdir()
+        (stories / "base.md").write_text("root-level file")
+        sub = stories / "bugs"
+        sub.mkdir()
+        (sub / "BUG-10.md").write_text("nested file")
+
+        conf = self._conf_with_uploads(["stories/**/*.md"])
+        candidates, msgs = _discover_uploadable_files(root, conf)
+
+        remote_paths = {c[1] for c in candidates}
+        assert "stories/base.md" in remote_paths
+        assert "stories/bugs/BUG-10.md" in remote_paths
+        assert not msgs
+
     def test_discovers_new_file_matching_upload_pattern(self, fake_project):
         root, shared_dir = fake_project
         # Create a new file in the shared dir that's not in shared_files

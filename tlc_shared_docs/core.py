@@ -30,7 +30,7 @@ def _glob_match(path: str, pattern: str) -> bool:
     regex = regex.replace(r"\*\*", "<<GLOBSTAR>>")
     regex = regex.replace(r"\*", r"[^/]*")
     regex = regex.replace(r"\?", r"[^/]")
-    regex = regex.replace("<<GLOBSTAR_SLASH>>", r"(.+/)?")
+    regex = regex.replace("<<GLOBSTAR_SLASH>>", r"([^/]+/)*")
     regex = regex.replace("<<GLOBSTAR>>", r".*")
     return bool(re.fullmatch(regex, path))
 
