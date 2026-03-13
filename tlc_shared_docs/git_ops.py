@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import shutil
 import tempfile
 from pathlib import Path
@@ -42,8 +41,9 @@ def list_remote_files(
         output = repo.git.ls_tree("-r", "--name-only", f"origin/{branch}")
         all_files = output.splitlines() if output else []
 
-        # Filter with fnmatch (supports *, ?, [seq], **)
-        matched = [f for f in all_files if fnmatch.fnmatch(f, pattern)]
+        # Filter with our glob_match (supports *, ?, [seq], **)
+        from tlc_shared_docs.config import glob_match
+        matched = [f for f in all_files if glob_match(f, pattern)]
         return matched
     except GitCommandError as exc:
         raise GitError(f"Failed to list files from {url}: {exc}") from exc

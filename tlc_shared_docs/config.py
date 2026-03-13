@@ -60,6 +60,23 @@ class SharedConfig:
 _GLOB_CHARS = set("*?[")
 
 
+def glob_match(path: str, pattern: str) -> bool:
+    """Match *path* against a glob *pattern* supporting ``**`` recursion.
+
+    ``fnmatch`` doesn't handle ``**`` as recursive, so we convert the
+    pattern to a regex where ``**/`` matches zero or more directory levels.
+    """
+    regex = re.escape(pattern)
+    # re.escape turns * into \*, ** into \*\*
+    regex = regex.replace(r"\*\*/", "<<GLOBSTAR_SLASH>>")
+    regex = regex.replace(r"\*\*", "<<GLOBSTAR>>")
+    regex = regex.replace(r"\*", r"[^/]*")
+    regex = regex.replace(r"\?", r"[^/]")
+    regex = regex.replace("<<GLOBSTAR_SLASH>>", r"([^/]+/)*")
+    regex = regex.replace("<<GLOBSTAR>>", r".*")
+    return bool(re.fullmatch(regex, path))
+
+
 def is_glob(path: str) -> bool:
     """Return True if *path* contains glob wildcard characters."""
     return bool(_GLOB_CHARS & set(path))

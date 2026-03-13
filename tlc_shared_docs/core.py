@@ -7,32 +7,10 @@ import logging
 from pathlib import Path
 from typing import Callable, List, Optional
 
-import fnmatch
-import re
-
 import tlc_shared_docs.config as cfg
 import tlc_shared_docs.git_ops as git_ops
 
 logger = logging.getLogger(__name__)
-
-
-def _glob_match(path: str, pattern: str) -> bool:
-    """Match *path* against a glob *pattern* supporting ``**`` recursion.
-
-    ``fnmatch`` doesn't handle ``**`` as recursive, so we convert the
-    pattern to a regex where ``**/`` matches zero or more directory levels.
-    """
-    # Escape the pattern for regex, then restore glob semantics.
-    # Handle **/ first (zero or more dirs), then lone ** , then single *
-    regex = re.escape(pattern)
-    # re.escape turns * into \*, ** into \*\*, / into /
-    regex = regex.replace(r"\*\*/", "<<GLOBSTAR_SLASH>>")
-    regex = regex.replace(r"\*\*", "<<GLOBSTAR>>")
-    regex = regex.replace(r"\*", r"[^/]*")
-    regex = regex.replace(r"\?", r"[^/]")
-    regex = regex.replace("<<GLOBSTAR_SLASH>>", r"([^/]+/)*")
-    regex = regex.replace("<<GLOBSTAR>>", r".*")
-    return bool(re.fullmatch(regex, path))
 
 
 def _resolve_config(
@@ -304,7 +282,7 @@ def _discover_uploadable_files(
 
         # Check if any upload pattern permits this path
         permitted = any(
-            _glob_match(remote_path, pat) for pat in upload_cfg.paths
+            cfg.glob_match(remote_path, pat) for pat in upload_cfg.paths
         )
         if permitted:
             candidates.append((local_file, remote_path))
