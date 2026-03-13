@@ -154,6 +154,7 @@ def get_files(
     project_root: Optional[Path] = None,
     dry_run: bool = False,
     central_url: Optional[str] = None,
+    project: Optional[str] = None,
     _get_shas: Callable[..., dict[str, str]] = git_ops.get_remote_blob_shas,
     _sparse_checkout: Callable[..., tuple] = git_ops.sparse_checkout_files,
     _read_clone: Callable[..., bytes] = git_ops.read_file_from_clone,
@@ -169,7 +170,7 @@ def get_files(
     """
     root = project_root or cfg.find_project_root()
     cfg.ensure_shared_dir(root)
-    conf = cfg.load_config(root)
+    conf = cfg.load_config(root, project=project)
 
     # Resolve central mode if applicable
     conf, resolve_msgs = _resolve_config(
@@ -318,6 +319,7 @@ def push_files(
     dry_run: bool = False,
     force: bool = False,
     central_url: Optional[str] = None,
+    project: Optional[str] = None,
     _sparse_checkout: Callable[..., tuple] = git_ops.sparse_checkout_files,
     _cleanup: Callable[..., None] = git_ops.cleanup,
     _push: Callable[..., None] = git_ops.push_files,
@@ -330,7 +332,7 @@ def push_files(
     Dependency parameters (prefixed with _) allow test injection.
     """
     root = project_root or cfg.find_project_root()
-    conf = cfg.load_config(root)
+    conf = cfg.load_config(root, project=project)
 
     # Resolve central mode if applicable
     conf, resolve_msgs = _resolve_config(

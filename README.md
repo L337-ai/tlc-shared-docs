@@ -193,6 +193,55 @@ tlc-shared-docs push --force
 
 > **Note:** Auto-upload only works in central mode. In local mode, add new entries directly to your `shared.json` `shared_files` list.
 
+### Multi-project configs
+
+If your repo participates in multiple architecture projects (e.g., auth, events, agent-coder), you can define them all in a single `shared.json` and select which one to use at runtime:
+
+```json
+{
+  "projects": {
+    "auth": {
+      "source_repo": { "url": "https://github.com/your-org/tlc-auth-arch.git" },
+      "mode": "central"
+    },
+    "events": {
+      "source_repo": { "url": "https://github.com/your-org/tlc-events-arch.git", "branch": "dev" },
+      "mode": "central"
+    },
+    "agent-coder": {
+      "source_repo": { "url": "https://github.com/your-org/agent-coder.git" },
+      "mode": "central"
+    }
+  },
+  "default_project": "agent-coder"
+}
+```
+
+Each project entry supports the same fields as the legacy single-source format (`source_repo`, `mode`, `shared_files`, `uploads`).
+
+#### Usage
+
+```bash
+# Pull docs for a specific project
+tlc-shared-docs get --project agent-coder
+tlc-shared-docs get -p auth
+
+# Uses default_project when --project is omitted
+tlc-shared-docs get
+
+# Push works the same way
+tlc-shared-docs push -p events --dry-run
+```
+
+| Field | Description |
+|---|---|
+| `projects.<name>` | A named project entry (same schema as legacy root config) |
+| `default_project` | Project to use when `--project` is not specified |
+
+If no `--project` flag is given and no `default_project` is set, the command exits with an error listing available projects.
+
+> **Backward compatibility:** The legacy single-source format (with `source_repo` at the root) still works exactly as before. No migration needed.
+
 ## Requirements
 
 - Python 3.9+

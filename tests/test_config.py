@@ -250,3 +250,87 @@ class TestLoadConfigWithUploads:
         root, _ = configured_project
         conf = load_config(root)
         assert conf.uploads is None
+
+
+class TestMultiProjectConfig:
+    """Tests for multi-project shared.json format."""
+
+    def _multi_config(self, default=None):
+        """Build a multi-project config dict."""
+        config: dict = {
+            "projects": {
+                "auth": {
+                    "source_repo": {"url": "https://github.com/L337-ai/tlc-auth-arch.git"},
+                    "mode": "central",
+                },
+                "events": {
+                    "source_repo": {"url": "https://github.com/L337-ai/tlc-events-arch.git", "branch": "dev"},
+                    "mode": "central",
+                    "shared_files": [
+                        {"remote_path": "events/guide.md", "local_path": "events/guide.md", "action": "get"}
+                    ],
+                },
+                "agent-coder": {
+                    "source_repo": {"url": "https://github.com/L337-ai/agent-coder.git"},
+                    "mode": "central",
+                    "uploads": {"allowed": True, "paths": ["agent-coder/**/*.md"]},
+                },
+            },
+        }
+        if default:
+            config["default_project"] = default
+        return config
+
+    def test_selects_named_project(self, fake_project):
+        root, shared_dir = fake_project
+        (shared_dir / "shared.json").write_text(json.dumps(self._multi_config()), encoding="utf-8")
+
+        conf = load_config(root, project="events")
+        assert conf.source_repo.url == "https://github.com/L337-ai/tlc-events-arch.git"
+        assert conf.source_repo.branch == "dev"
+        assert conf.mode == "central"
+        assert len(conf.shared_files) == 1
+
+    def test_uses_default_project_when_none_specified(self, fake_project):
+        root, shared_dir = fake_project
+        (shared_dir / "shared.json").write_text(
+            json.dumps(self._multi_config(default="agent-coder")), encoding="utf-8"
+        )
+
+        conf = load_config(root)
+        assert conf.source_repo.url == "https://github.com/L337-ai/agent-coder.git"
+        assert conf.uploads is not None
+        assert conf.uploads.allowed is True
+
+    def test_raises_when_no_project_and_no_default(self, fake_project):
+        root, shared_dir = fake_project
+        (shared_dir / "shared.json").write_text(json.dumps(self._multi_config()), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="No --project specified"):
+            load_config(root)
+
+    def test_raises_when_project_not_found(self, fake_project):
+        root, shared_dir = fake_project
+        (shared_dir / "shared.json").write_text(json.dumps(self._multi_config()), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="not found"):
+            load_config(root, project="nonexistent")
+
+    def test_error_lists_available_projects(self, fake_project):
+        root, shared_dir = fake_project
+        (shared_dir / "shared.json").write_text(json.dumps(self._multi_config()), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="agent-coder.*auth.*events"):
+            load_config(root, project="nope")
+
+    def test_legacy_format_still_works(self, configured_project):
+        root, _ = configured_project
+        conf = load_config(root)
+        assert conf.source_repo.url == "https://github.com/github/gitignore.git"
+
+    def test_project_defaults_branch_to_main(self, fake_project):
+        root, shared_dir = fake_project
+        (shared_dir / "shared.json").write_text(json.dumps(self._multi_config()), encoding="utf-8")
+
+        conf = load_config(root, project="auth")
+        assert conf.source_repo.branch == "main"

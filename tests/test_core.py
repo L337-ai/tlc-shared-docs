@@ -773,3 +773,96 @@ class TestPushWithUploadDiscovery:
         assert stub.push_called
         assert "new-doc.md" in stub.push_kwargs["file_map"]
         assert any("OK: pushed new-doc.md" in m for m in messages)
+
+
+# ===========================================================================
+# Multi-project tests
+# ===========================================================================
+
+
+class TestMultiProjectGetAndPush:
+    """Tests for --project selection in get/push."""
+
+    def _multi_config(self, default=None):
+        config: dict = {
+            "projects": {
+                "auth": {
+                    "source_repo": {"url": "https://example.com/auth.git"},
+                    "shared_files": [
+                        {"remote_path": "auth/guide.md", "local_path": "auth/guide.md", "action": "get"}
+                    ],
+                },
+                "agent": {
+                    "source_repo": {"url": "https://example.com/agent.git"},
+                    "shared_files": [
+                        {"remote_path": "agent/spec.md", "local_path": "agent/spec.md", "action": "get"}
+                    ],
+                },
+            },
+        }
+        if default:
+            config["default_project"] = default
+        return config
+
+    def test_get_with_project_selects_correct_source(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, self._multi_config())
+
+        stub = StubGitOps(
+            remote_shas={"agent/spec.md": "sha1"},
+            sparse_files={"agent/spec.md": b"# Agent Spec"},
+        )
+        messages = get_files(
+            project_root=root, project="agent",
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+        )
+        assert any("OK" in m and "agent/spec.md" in m for m in messages)
+        # Should not have fetched auth files
+        assert not any("auth" in m for m in messages)
+
+    def test_get_dry_run_with_default_project(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, self._multi_config(default="auth"))
+
+        stub = StubGitOps(remote_shas={"auth/guide.md": "sha1"})
+        messages = get_files(
+            project_root=root, dry_run=True,
+            _get_shas=stub.get_remote_blob_shas,
+        )
+        assert any("[dry-run]" in m and "auth/guide.md" in m for m in messages)
+
+    def test_get_raises_without_project_or_default(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, self._multi_config())
+
+        with pytest.raises(ValueError, match="No --project specified"):
+            get_files(project_root=root)
+
+    def test_push_with_project_selects_correct_source(self, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "alpha": {
+                    "source_repo": {"url": "https://example.com/alpha.git"},
+                    "shared_files": [
+                        {"remote_path": "docs/a.md", "local_path": "a.md", "action": "push"}
+                    ],
+                },
+            },
+            "default_project": "alpha",
+        }
+        _write_config(shared_dir, config)
+        (shared_dir / "a.md").write_text("# Alpha doc")
+
+        stub = StubGitOps()
+        messages = push_files(
+            project_root=root, force=True, project="alpha",
+            _sparse_checkout=stub.sparse_checkout_files,
+            _cleanup=stub.cleanup,
+            _push=stub.push_files,
+        )
+        assert stub.push_called
+        assert stub.push_kwargs["url"] == "https://example.com/alpha.git"

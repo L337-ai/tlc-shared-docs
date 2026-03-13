@@ -33,6 +33,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Use central control mode: fetch config from this repo URL",
     )
+    get_parser.add_argument(
+        "-p", "--project",
+        default=None,
+        help="Select a named project from shared.json (multi-project configs)",
+    )
 
     # --- push: push local shared files to the remote repo ---
     push_parser = sub.add_parser("push", help="Push local shared files to the remote repo")
@@ -52,6 +57,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Use central control mode: fetch config from this repo URL",
     )
+    push_parser.add_argument(
+        "-p", "--project",
+        default=None,
+        help="Select a named project from shared.json (multi-project configs)",
+    )
 
     return parser
 
@@ -69,9 +79,14 @@ def main(argv: list[str] | None = None) -> None:
     try:
         # Dispatch to the correct command handler
         if args.command == "get":
-            messages = get_files(dry_run=args.dry_run, central_url=args.central)
+            messages = get_files(
+                dry_run=args.dry_run, central_url=args.central, project=args.project,
+            )
         elif args.command == "push":
-            messages = push_files(dry_run=args.dry_run, force=args.force, central_url=args.central)
+            messages = push_files(
+                dry_run=args.dry_run, force=args.force,
+                central_url=args.central, project=args.project,
+            )
         else:
             parser.print_help()
             sys.exit(1)

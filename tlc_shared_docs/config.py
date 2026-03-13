@@ -225,28 +225,57 @@ def parse_upload_config(data: dict) -> Optional[UploadConfig]:
     )
 
 
-def load_config(project_root: Path) -> SharedConfig:
-    """Read and parse shared.json from the project's shared directory."""
+def _parse_project_entry(data: dict) -> SharedConfig:
+    """Parse a single project entry (or legacy root) into a SharedConfig."""
+    repo_data = data["source_repo"]
+    source_repo = SourceRepo(
+        url=repo_data["url"],
+        branch=repo_data.get("branch", "main"),
+    )
+    return SharedConfig(
+        source_repo=source_repo,
+        shared_files=parse_shared_files(data),
+        mode=data.get("mode", "local"),
+        uploads=parse_upload_config(data),
+    )
+
+
+def load_config(project_root: Path, project: Optional[str] = None) -> SharedConfig:
+    """Read and parse shared.json from the project's shared directory.
+
+    Supports two formats:
+
+    - **Legacy** (single source): ``{"source_repo": {...}, ...}``
+    - **Multi-project**: ``{"projects": {"name": {...}, ...}, "default_project": "name"}``
+
+    When using multi-project format, *project* selects which entry to use.
+    Falls back to ``default_project`` if *project* is ``None``.
+    """
     cfg_path = config_path(project_root)
     if not cfg_path.exists():
         raise FileNotFoundError(f"Config not found: {cfg_path}")
 
     data = json.loads(cfg_path.read_text(encoding="utf-8"))
 
-    # Parse the source repo connection info
-    repo_data = data["source_repo"]
-    source_repo = SourceRepo(
-        url=repo_data["url"],
-        branch=repo_data.get("branch", "main"),
-    )
+    # Multi-project format: {"projects": {...}}
+    if "projects" in data:
+        projects = data["projects"]
+        chosen = project or data.get("default_project")
 
-    mode = data.get("mode", "local")
-    shared_files = parse_shared_files(data)
-    uploads = parse_upload_config(data)
+        if not chosen:
+            available = ", ".join(sorted(projects.keys()))
+            raise ValueError(
+                f"No --project specified and no default_project set. "
+                f"Available projects: {available}"
+            )
 
-    return SharedConfig(
-        source_repo=source_repo,
-        shared_files=shared_files,
-        mode=mode,
-        uploads=uploads,
-    )
+        if chosen not in projects:
+            available = ", ".join(sorted(projects.keys()))
+            raise ValueError(
+                f"Project '{chosen}' not found. Available projects: {available}"
+            )
+
+        return _parse_project_entry(projects[chosen])
+
+    # Legacy single-source format
+    return _parse_project_entry(data)
