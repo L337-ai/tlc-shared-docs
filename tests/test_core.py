@@ -72,7 +72,8 @@ class StubGitOps:
     def fetch_single_file(self, url: str, branch: str, file_path: str) -> bytes | None:
         return self.fetch_file_result
 
-    def push_files(self, url: str, branch: str, file_map: dict, commit_message: str, force: bool = False) -> List[str]:
+    def push_files(self, url: str, branch: str, file_map: dict, commit_message: str,
+                   force: bool = False, verbose: bool = False, _print: object = None) -> List[str]:
         self.push_called = True
         self.push_kwargs = {
             "url": url, "branch": branch, "file_map": file_map,

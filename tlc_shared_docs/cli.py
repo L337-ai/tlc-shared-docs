@@ -24,6 +24,7 @@ commands:
   push  Push local shared files to the remote repo
         --dry-run              Preview without making changes
         --force                Overwrite even if remote files changed
+        -v, --verbose          Show detailed debug output for push
         --central URL          Fetch config from a central repo URL
         -p, --project NAME     Select a named project (multi-project configs)
 
@@ -102,6 +103,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Select a named project from shared.json (multi-project configs)",
     )
+    push_parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Show detailed debug output for diagnosing push issues",
+    )
 
     # --- list: show available projects ---
     sub.add_parser("list", help="List available projects in shared.json")
@@ -164,6 +170,7 @@ def main(argv: list[str] | None = None) -> None:
             messages = push_files(
                 dry_run=args.dry_run, force=args.force,
                 central_url=args.central, project=args.project,
+                verbose=args.verbose,
                 _print=lambda m: print(m, flush=True),
             )
         else:

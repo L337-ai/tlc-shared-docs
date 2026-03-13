@@ -363,6 +363,7 @@ def push_files(
     force: bool = False,
     central_url: Optional[str] = None,
     project: Optional[str] = None,
+    verbose: bool = False,
     _sparse_checkout: Callable[..., tuple] = git_ops.sparse_checkout_files,
     _cleanup: Callable[..., None] = git_ops.cleanup,
     _push: Callable[..., None] = git_ops.push_files,
@@ -401,6 +402,14 @@ def push_files(
 
     files_to_push = [f for f in conf.shared_files if f.action == "push"]
 
+    if verbose:
+        emit(f"[verbose] Project root: {root}")
+        emit(f"[verbose] Source repo: {conf.source_repo.url} ({conf.source_repo.branch})")
+        emit(f"[verbose] Mode: {conf.mode}")
+        emit(f"[verbose] Push entries in config: {len(files_to_push)}")
+        for sf in files_to_push:
+            emit(f"[verbose]   remote_path={sf.remote_path}  local_path={sf.local_path}")
+
     # Discover new files eligible for upload (central mode only)
     upload_candidates, upload_msgs = _discover_uploadable_files(root, conf)
     for m in upload_msgs:
@@ -425,7 +434,10 @@ def push_files(
         if not local.exists():
             emit(f"WARNING: Local file not found, skipping: {local}")
             continue
-        file_map[sf.remote_path] = local.read_bytes()
+        content = local.read_bytes()
+        file_map[sf.remote_path] = content
+        if verbose:
+            emit(f"[verbose] Read {len(content)} bytes from {local}")
 
     # Add upload candidates to the file map
     for local_file, remote_path in upload_candidates:
@@ -478,12 +490,20 @@ def push_files(
     commit_msg = f"Updated by {repo_name} on {branch_name}"
 
     emit(f"Pushing {len(file_map)} file(s) to {conf.source_repo.url}...")
+    if verbose:
+        emit(f"[verbose] Commit message: {commit_msg}")
+        emit(f"[verbose] Force: {force}")
+        for rp, content in file_map.items():
+            emit(f"[verbose] file_map[{rp}] = {len(content)} bytes")
+
     actually_pushed = _push(
         url=conf.source_repo.url,
         branch=conf.source_repo.branch,
         file_map=file_map,
         commit_message=commit_msg,
         force=force,
+        verbose=verbose,
+        _print=_print,
     )
 
     if not actually_pushed:

@@ -134,6 +134,8 @@ def push_files(
     file_map: dict[str, bytes],
     commit_message: str,
     force: bool = False,
+    verbose: bool = False,
+    _print: object = None,
 ) -> List[str]:
     """Clone *url*, write *file_map* ``{remote_path: content}``, commit, and
     push to *branch*.
@@ -143,18 +145,26 @@ def push_files(
     Returns a list of remote paths that were actually written (i.e., differed
     from what was already on the remote). An empty list means nothing changed.
     """
+    def vlog(msg: str) -> None:
+        if verbose and _print:
+            _print(msg)
+
     clone_dir = _tmp_clone_dir()
     try:
+        vlog(f"[verbose] Clone dir: {clone_dir}")
+
         # Shallow clone with the target branch checked out
         repo = Repo.init(clone_dir)
         repo.git.remote("add", "origin", url)
+        vlog(f"[verbose] Fetching {branch} from {url} (depth=1)...")
         repo.git.fetch("origin", branch, depth=1)
         repo.git.checkout(f"origin/{branch}", b=branch)
 
-        # Write each file and stage it for commit.
-        # Compare using git's blob SHA rather than raw bytes, because
-        # git may apply line-ending normalization (autocrlf) on checkout
-        # which would cause a false byte-match on Windows.
+        # Get the HEAD commit of the cloned branch
+        head_sha = repo.git.rev_parse("HEAD")
+        vlog(f"[verbose] Remote HEAD: {head_sha}")
+
+        # Read existing blob SHAs from the remote tree
         existing_shas: dict[str, str] = {}
         try:
             tree_output = repo.git.ls_tree("-r", f"origin/{branch}")
@@ -163,33 +173,53 @@ def push_files(
                 if len(parts) == 4:
                     existing_shas[parts[3]] = parts[2]
         except GitCommandError:
-            pass  # if ls-tree fails, treat all files as new
+            pass
+
+        vlog(f"[verbose] Remote tree has {len(existing_shas)} file(s)")
 
         actually_pushed: List[str] = []
         for remote_path, content in file_map.items():
             dest = clone_dir / remote_path
             dest.parent.mkdir(parents=True, exist_ok=True)
 
-            # Compute the blob SHA git would assign to the new content,
-            # then compare against the existing blob SHA on the remote
+            # Compute the blob SHA git would assign to the new content
             new_sha = repo.git.hash_object("--stdin", input=content)
             old_sha = existing_shas.get(remote_path)
+
+            vlog(f"[verbose] {remote_path}: old_sha={old_sha} new_sha={new_sha} local_bytes={len(content)}")
+
             if old_sha and old_sha == new_sha:
-                continue  # content identical at the git level
+                vlog(f"[verbose] {remote_path}: SKIPPED (SHA match)")
+                continue
 
             dest.write_bytes(content)
             repo.index.add([remote_path])
             actually_pushed.append(remote_path)
+            vlog(f"[verbose] {remote_path}: STAGED for commit")
 
         if not actually_pushed:
-            return []  # nothing to push
+            vlog("[verbose] No files differ — skipping commit and push")
+            return []
 
-        repo.index.commit(commit_message)
+        commit = repo.index.commit(commit_message)
+        vlog(f"[verbose] Committed: {commit.hexsha} ({commit_message})")
 
         push_args = ["origin", branch]
         if force:
             push_args.insert(0, "--force")
-        repo.git.push(*push_args)
+        vlog(f"[verbose] Pushing: git push {' '.join(push_args)}")
+        push_output = repo.git.push(*push_args)
+        vlog(f"[verbose] Push output: {push_output or '(empty)'}")
+
+        # Verify the push landed
+        repo.git.fetch("origin", branch, depth=1)
+        remote_head = repo.git.rev_parse(f"origin/{branch}")
+        vlog(f"[verbose] Remote HEAD after push: {remote_head}")
+        if remote_head == commit.hexsha:
+            vlog("[verbose] Push confirmed — remote HEAD matches our commit")
+        else:
+            vlog(f"[verbose] WARNING: Remote HEAD ({remote_head}) != our commit ({commit.hexsha})")
+
         return actually_pushed
     except GitCommandError as exc:
         raise GitError(f"Failed to push to {url}: {exc}") from exc
