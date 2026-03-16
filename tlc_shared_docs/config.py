@@ -347,6 +347,43 @@ def list_projects(project_root: Path) -> List[dict[str, str]]:
     return result
 
 
+def set_branch(project_root: Path, branch: str, project: Optional[str] = None) -> List[str]:
+    """Update the ``branch`` field in shared.json for the given project(s).
+
+    In multi-project configs, *project* selects which project to update;
+    if *project* is ``None`` all projects are updated.  In single-source
+    configs the root ``source_repo.branch`` is updated.
+
+    Returns a list of human-readable confirmation messages.
+    """
+    cfg_path = config_path(project_root)
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"Config not found: {cfg_path}")
+
+    data = json.loads(cfg_path.read_text(encoding="utf-8"))
+    messages: List[str] = []
+
+    if "projects" in data:
+        projects = data["projects"]
+        targets = [project] if project else list(projects.keys())
+        for name in targets:
+            if name not in projects:
+                available = ", ".join(sorted(projects.keys()))
+                raise ValueError(
+                    f"Project '{name}' not found. Available projects: {available}"
+                )
+            old_branch = projects[name].get("source_repo", {}).get("branch", "main")
+            projects[name].setdefault("source_repo", {})["branch"] = branch
+            messages.append(f"Updated '{name}': {old_branch} -> {branch}")
+    else:
+        old_branch = data.get("source_repo", {}).get("branch", "main")
+        data.setdefault("source_repo", {})["branch"] = branch
+        messages.append(f"Updated branch: {old_branch} -> {branch}")
+
+    cfg_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return messages
+
+
 def load_config(project_root: Path, project: Optional[str] = None) -> SharedConfig:
     """Read and parse shared.json from the project's shared directory.
 

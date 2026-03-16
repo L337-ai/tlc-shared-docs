@@ -24,6 +24,7 @@ from tlc_shared_docs.config import (
     parse_upload_config,
     resolve_local_path,
     save_hashes,
+    set_branch,
     shared_dir_path,
     validate_project_name,
 )
@@ -465,3 +466,61 @@ class TestListProjects:
         root, _ = fake_project
         with pytest.raises(FileNotFoundError):
             list_projects(root)
+
+
+class TestSetBranch:
+    """Tests for set_branch() — updates branch in shared.json."""
+
+    def _write_multi(self, shared_dir: Path, branches: dict) -> None:
+        config = {
+            "projects": {
+                name: {"source_repo": {"url": "https://example.com/repo.git", "branch": branch}}
+                for name, branch in branches.items()
+            }
+        }
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+    def test_updates_single_project_by_name(self, fake_project):
+        root, shared_dir = fake_project
+        self._write_multi(shared_dir, {"alpha": "main", "beta": "main"})
+
+        msgs = set_branch(root, "sprint-1", project="alpha")
+
+        data = json.loads((shared_dir / "shared.json").read_text())
+        assert data["projects"]["alpha"]["source_repo"]["branch"] == "sprint-1"
+        assert data["projects"]["beta"]["source_repo"]["branch"] == "main"
+        assert any("alpha" in m for m in msgs)
+
+    def test_updates_all_projects_when_no_project_specified(self, fake_project):
+        root, shared_dir = fake_project
+        self._write_multi(shared_dir, {"alpha": "main", "beta": "main"})
+
+        msgs = set_branch(root, "sprint-2")
+
+        data = json.loads((shared_dir / "shared.json").read_text())
+        assert data["projects"]["alpha"]["source_repo"]["branch"] == "sprint-2"
+        assert data["projects"]["beta"]["source_repo"]["branch"] == "sprint-2"
+        assert len(msgs) == 2
+
+    def test_updates_legacy_single_source_config(self, fake_project):
+        root, shared_dir = fake_project
+        config = {"source_repo": {"url": "https://example.com/repo.git", "branch": "main"}}
+        (shared_dir / "shared.json").write_text(json.dumps(config), encoding="utf-8")
+
+        msgs = set_branch(root, "dev")
+
+        data = json.loads((shared_dir / "shared.json").read_text())
+        assert data["source_repo"]["branch"] == "dev"
+        assert any("dev" in m for m in msgs)
+
+    def test_raises_for_unknown_project(self, fake_project):
+        root, shared_dir = fake_project
+        self._write_multi(shared_dir, {"alpha": "main"})
+
+        with pytest.raises(ValueError, match="not found"):
+            set_branch(root, "sprint-1", project="nonexistent")
+
+    def test_raises_when_no_config(self, fake_project):
+        root, _ = fake_project
+        with pytest.raises(FileNotFoundError):
+            set_branch(root, "sprint-1")

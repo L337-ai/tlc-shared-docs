@@ -465,14 +465,11 @@ def push_files(
                 # New file (not on remote yet) — no conflict possible
                 if remote_sha is None:
                     continue
-                # File exists on remote but we never pulled it — conflict
+                # No stored hash means this is a push-only file (never pulled
+                # via get) — we own it, so no conflict.
                 if stored_sha is None:
-                    emit(
-                        f"CONFLICT: {remote_path} exists on remote but was never "
-                        f"pulled. Use --force to overwrite."
-                    )
                     continue
-                # Remote changed since our last pull — conflict
+                # Remote changed since our last pull — someone else modified it
                 if remote_sha != stored_sha:
                     emit(
                         f"CONFLICT: {remote_path} was modified on remote since "

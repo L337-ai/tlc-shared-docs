@@ -30,16 +30,22 @@ commands:
 
   list  List available projects defined in shared.json
 
+  branch Switch the source branch for a project (sprint workflows)
+        BRANCH                 Branch name to switch to
+        -p, --project NAME     Only update this project (default: all)
+
   init  Install a Claude agent skill file into this repo
         --skill NAME           Skill to install (player1=arch repo, player2=consumer)
 
 examples:
-  tlc-shared-docs list                      Show available projects
-  tlc-shared-docs get -p agent-coder        Pull docs for a specific project
-  tlc-shared-docs get --dry-run             Preview what would be fetched
-  tlc-shared-docs push --force              Push and overwrite remote changes
-  tlc-shared-docs push -p auth --dry-run    Preview push for a project
-  tlc-shared-docs init --skill player1     Install Claude skill for arch repos
+  tlc-shared-docs list                           Show available projects
+  tlc-shared-docs get -p agent-coder             Pull docs for a specific project
+  tlc-shared-docs get --dry-run                  Preview what would be fetched
+  tlc-shared-docs push --force                   Push and overwrite remote changes
+  tlc-shared-docs push -p auth --dry-run         Preview push for a project
+  tlc-shared-docs branch tag-code-mvp            Switch all projects to sprint branch
+  tlc-shared-docs branch main -p agent-coder     Switch one project back to main
+  tlc-shared-docs init --skill player1           Install Claude skill for arch repos
 """
 
 
@@ -112,6 +118,21 @@ def _build_parser() -> argparse.ArgumentParser:
     # --- list: show available projects ---
     sub.add_parser("list", help="List available projects in shared.json")
 
+    # --- branch: switch the source branch ---
+    branch_parser = sub.add_parser(
+        "branch", help="Switch the source branch for get/push operations",
+    )
+    branch_parser.add_argument(
+        "branch_name",
+        metavar="BRANCH",
+        help="Branch name to switch to (e.g. tag-code-mvp, main)",
+    )
+    branch_parser.add_argument(
+        "-p", "--project",
+        default=None,
+        help="Only update this project (default: update all projects)",
+    )
+
     # --- init: install Claude agent skill files ---
     init_parser = sub.add_parser(
         "init", help="Install a Claude agent skill file into this repo",
@@ -151,6 +172,12 @@ def main(argv: list[str] | None = None) -> None:
 
             # Insert or replace the generic stub in CLAUDE.md
             print(install_claude_md_stub(root))
+            return
+        elif args.command == "branch":
+            root = cfg.find_project_root()
+            msgs = cfg.set_branch(root, args.branch_name, project=args.project)
+            for m in msgs:
+                print(m)
             return
         elif args.command == "list":
             projects = cfg.list_projects(cfg.find_project_root())
