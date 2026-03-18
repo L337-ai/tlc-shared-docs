@@ -347,6 +347,34 @@ def list_projects(project_root: Path) -> List[dict[str, str]]:
     return result
 
 
+def update_project_shared_files(
+    project_root: Path,
+    project: Optional[str],
+    shared_files: List[SharedFile],
+) -> None:
+    """Write the resolved shared_files list back into shared.json.
+
+    Called after a central-mode ``get`` to record the current file list
+    from the architecture repo. In multi-project configs only the target
+    project's ``shared_files`` key is replaced; other projects are untouched.
+    In legacy single-source configs the root ``shared_files`` key is updated.
+    """
+    cfg_path = config_path(project_root)
+    data = json.loads(cfg_path.read_text(encoding="utf-8"))
+
+    entries = [
+        {"remote_path": sf.remote_path, "local_path": sf.local_path, "action": sf.action}
+        for sf in shared_files
+    ]
+
+    if "projects" in data and project and project in data["projects"]:
+        data["projects"][project]["shared_files"] = entries
+    else:
+        data["shared_files"] = entries
+
+    cfg_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
 def set_branch(project_root: Path, branch: str, project: Optional[str] = None) -> List[str]:
     """Update the ``branch`` field in shared.json for the given project(s).
 

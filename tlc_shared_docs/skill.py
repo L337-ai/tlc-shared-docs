@@ -207,10 +207,17 @@ You can use wildcards for `get` actions:
    `tlc-shared-docs get`, they receive the updated file list. There is no
    deploy step.
 
-9. **Removing files from a consumer's list** does not delete them on the
-   consumer side. Old files remain until the consumer runs
-   `tlc-shared-docs get --clean`. Tell consumers to use `--clean` after
-   you remove entries from their config.
+9. **Consumer `shared.json` is auto-updated on every `get`.** When a
+   consumer runs `get` in central mode, the tool writes the resolved
+   `shared_files` list back into their local `shared.json`. This means
+   their AI agent can read `shared.json` to know exactly which files they
+   are responsible for syncing. You do not need to tell consumers what
+   files they have — they can always check `shared.json` after a `get`.
+
+10. **Removing files from a consumer's list** does not delete them on the
+    consumer side. Old files remain until the consumer runs
+    `tlc-shared-docs get --clean`. Tell consumers to use `--clean` after
+    you remove entries from their config.
 
 ---
 
@@ -318,6 +325,31 @@ understand which projects and sources are configured.
 }
 ```
 
+### shared_files is auto-populated
+
+After every `get` in central mode, `tlc-shared-docs` writes the resolved
+file list back into `shared.json` under the project's `shared_files` key.
+You do **not** need to list files manually — they appear automatically:
+
+```json
+{
+  "projects": {
+    "agent-coder": {
+      "source_repo": { "url": "..." },
+      "mode": "central",
+      "shared_files": [
+        { "remote_path": "docs/guide.md", "local_path": "agent-coder/guide.md", "action": "get" },
+        { "remote_path": "docs/api.md",   "local_path": "agent-coder/api.md",   "action": "push" }
+      ]
+    }
+  }
+}
+```
+
+This list tells you — and your AI agent — exactly which documents this
+repo is responsible for keeping current. **Do not manually edit
+`shared_files`; it is overwritten on every `get`.**
+
 ---
 
 ## Where shared files live
@@ -405,15 +437,25 @@ tlc-shared-docs push --dry-run
    without understanding what changed on the remote. Run `get` first to pull
    the latest, then resolve and push again.
 
-8. **Never modify `docs/source/shared/shared.json` without being asked.**
-   This is a coordination file shared across the team.
+8. **`shared_files` in `shared.json` is auto-managed — do not edit it.**
+   Every `get` in central mode overwrites this section with the current list
+   from the architecture repo. **Do** read it to understand which files this
+   repo is syncing, but never write to it manually. Only edit `source_repo`,
+   `mode`, and `default_project` by hand (or use `tlc-shared-docs branch`).
 
-9. **You cannot control what files are available.** The architecture repo
-   (player 1) manages the `.configs/` directory that determines what this
-   repo gets. If the user wants access to a new file, tell them to update
-   the consumer config in the architecture repo.
+9. **The `shared_files` list shows which docs need to stay current.**
+   After each `get`, read `shared.json` to see which files are in scope.
+   Files with `"action": "get"` are owned by the architecture repo; files
+   with `"action": "push"` are owned by this repo and must be kept up to
+   date as code evolves. When the user makes changes that affect a push
+   file, remind them to run `tlc-shared-docs push` to sync.
 
-10. **Use `--clean` to remove stale files.** If the architecture repo
+10. **You cannot control what files are available.** The architecture repo
+    (player 1) manages the `.configs/` directory that determines what this
+    repo gets. If the user wants access to a new file, tell them to update
+    the consumer config in the architecture repo.
+
+11. **Use `--clean` to remove stale files.** If the architecture repo
     removes files from the share list, old copies stay on disk. Run
     `tlc-shared-docs get --clean` to delete files that are no longer in
     the current share list. Use `--clean --dry-run` to preview first.

@@ -183,6 +183,15 @@ def get_files(
     for m in expand_msgs:
         emit(m)
 
+    # In central mode, write the resolved file list back to shared.json so
+    # the consumer can inspect what the architecture repo is sharing and agents
+    # know which docs to keep current. Globs are expanded; push entries preserved.
+    if conf.mode == "central" and not dry_run:
+        push_entries = [sf for sf in conf.shared_files if sf.action != "get"]
+        all_resolved = files_to_get + push_entries
+        cfg.update_project_shared_files(root, project, all_resolved)
+        emit(f"Updated shared.json: {len(all_resolved)} file(s) recorded from central config.")
+
     files_needed: List[cfg.SharedFile] = []
     skipped = 0
     updated = 0

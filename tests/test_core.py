@@ -1080,3 +1080,164 @@ class TestMultiProjectGetAndPush:
         # Each project's files are in their own subdirectory
         assert (shared_dir / "auth" / "guide.md").read_bytes() == b"# Auth Guide"
         assert (shared_dir / "agent" / "spec.md").read_bytes() == b"# Agent Spec"
+
+
+# ===========================================================================
+# shared.json write-back tests (central mode auto-populate)
+# ===========================================================================
+
+
+class TestCentralGetWritesBackSharedFiles:
+    """After get in central mode, shared.json is updated with the resolved file list."""
+
+    def _central_config(self, project_name="myproj", extra_files=None):
+        """Build a minimal multi-project shared.json dict (no shared_files initially)."""
+        return {
+            "projects": {
+                project_name: {
+                    "source_repo": {"url": "https://example.com/shared.git", "branch": "main"},
+                    "mode": "central",
+                },
+            },
+            "default_project": project_name,
+        }
+
+    def test_get_writes_resolved_files_to_shared_json(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, self._central_config())
+
+        central_data = {
+            "shared_files": [
+                {"remote_path": "docs/guide.md", "local_path": "guide.md", "action": "get"}
+            ]
+        }
+
+        stub = StubGitOps(
+            fetch_file_result=json.dumps(central_data).encode(),
+            remote_shas={"docs/guide.md": "sha1"},
+            sparse_files={"docs/guide.md": b"# Guide"},
+        )
+        get_files(
+            project_root=root, project="myproj",
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=stub.fetch_single_file,
+        )
+
+        # shared.json should now contain the resolved shared_files for myproj
+        data = json.loads((shared_dir / "shared.json").read_text())
+        proj_files = data["projects"]["myproj"]["shared_files"]
+        assert len(proj_files) == 1
+        assert proj_files[0]["remote_path"] == "docs/guide.md"
+        assert proj_files[0]["local_path"] == "myproj/guide.md"  # auto-prefixed
+        assert proj_files[0]["action"] == "get"
+
+    def test_get_preserves_push_entries_in_write_back(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, self._central_config())
+
+        central_data = {
+            "shared_files": [
+                {"remote_path": "docs/guide.md", "local_path": "guide.md", "action": "get"},
+                {"remote_path": "docs/api.md", "local_path": "api.md", "action": "push"},
+            ]
+        }
+
+        stub = StubGitOps(
+            fetch_file_result=json.dumps(central_data).encode(),
+            remote_shas={"docs/guide.md": "sha1"},
+            sparse_files={"docs/guide.md": b"# Guide"},
+        )
+        get_files(
+            project_root=root, project="myproj",
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=stub.fetch_single_file,
+        )
+
+        data = json.loads((shared_dir / "shared.json").read_text())
+        proj_files = data["projects"]["myproj"]["shared_files"]
+        actions = {e["remote_path"]: e["action"] for e in proj_files}
+        assert actions["docs/guide.md"] == "get"
+        assert actions["docs/api.md"] == "push"
+
+    def test_dry_run_does_not_write_back(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, self._central_config())
+        original_text = (shared_dir / "shared.json").read_text()
+
+        central_data = {
+            "shared_files": [
+                {"remote_path": "docs/guide.md", "local_path": "guide.md", "action": "get"}
+            ]
+        }
+
+        stub = StubGitOps(
+            fetch_file_result=json.dumps(central_data).encode(),
+            remote_shas={"docs/guide.md": "sha1"},
+        )
+        get_files(
+            project_root=root, project="myproj", dry_run=True,
+            _get_shas=stub.get_remote_blob_shas,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=stub.fetch_single_file,
+        )
+
+        # shared.json must be unchanged in dry-run mode
+        assert (shared_dir / "shared.json").read_text() == original_text
+
+    def test_local_mode_does_not_write_back(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, _make_config(
+            shared_files=[{"remote_path": "doc.md", "local_path": "doc.md", "action": "get"}]
+        ))
+        original_text = (shared_dir / "shared.json").read_text()
+
+        stub = StubGitOps(
+            remote_shas={"doc.md": "sha1"},
+            sparse_files={"doc.md": b"content"},
+        )
+        get_files(
+            project_root=root,
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+        )
+
+        # local mode should not modify shared.json
+        assert (shared_dir / "shared.json").read_text() == original_text
+
+    def test_write_back_emits_message(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, self._central_config())
+
+        central_data = {
+            "shared_files": [
+                {"remote_path": "a.md", "local_path": "a.md", "action": "get"},
+                {"remote_path": "b.md", "local_path": "b.md", "action": "get"},
+            ]
+        }
+
+        stub = StubGitOps(
+            fetch_file_result=json.dumps(central_data).encode(),
+            remote_shas={"a.md": "sha1", "b.md": "sha2"},
+            sparse_files={"a.md": b"A", "b.md": b"B"},
+        )
+        messages = get_files(
+            project_root=root, project="myproj",
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=stub.fetch_single_file,
+        )
+
+        assert any("Updated shared.json" in m and "2 file(s)" in m for m in messages)
