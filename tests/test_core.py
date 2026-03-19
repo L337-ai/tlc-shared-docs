@@ -617,6 +617,58 @@ class TestCLI:
             main(["--version"])
         assert exc_info.value.code == 0
 
+    def test_get_all_iterates_every_project(self, fake_project, capsys):
+        from tlc_shared_docs.cli import main
+
+        root, shared_dir = fake_project
+        # Empty shared_files: get_files returns immediately without network calls,
+        # so we can verify the header/iteration logic without git access.
+        config = {
+            "projects": {
+                "alpha": {"source_repo": {"url": "https://example.com/alpha.git"}, "shared_files": []},
+                "beta":  {"source_repo": {"url": "https://example.com/beta.git"},  "shared_files": []},
+            },
+        }
+        _write_config(shared_dir, config)
+
+        import tlc_shared_docs.config as cfg_mod
+        original_find = cfg_mod.find_project_root
+        cfg_mod.find_project_root = lambda start=None: root
+        try:
+            main(["get", "-p", "all"])
+        finally:
+            cfg_mod.find_project_root = original_find
+
+        output = capsys.readouterr().out
+        assert "--- alpha ---" in output
+        assert "--- beta ---" in output
+
+    def test_get_space_separated_projects(self, fake_project, capsys):
+        from tlc_shared_docs.cli import main
+
+        root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "alpha": {"source_repo": {"url": "https://example.com/alpha.git"}, "shared_files": []},
+                "beta":  {"source_repo": {"url": "https://example.com/beta.git"},  "shared_files": []},
+                "gamma": {"source_repo": {"url": "https://example.com/gamma.git"}, "shared_files": []},
+            },
+        }
+        _write_config(shared_dir, config)
+
+        import tlc_shared_docs.config as cfg_mod
+        original_find = cfg_mod.find_project_root
+        cfg_mod.find_project_root = lambda start=None: root
+        try:
+            main(["get", "-p", "alpha beta"])
+        finally:
+            cfg_mod.find_project_root = original_find
+
+        output = capsys.readouterr().out
+        assert "--- alpha ---" in output
+        assert "--- beta ---" in output
+        assert "--- gamma ---" not in output
+
 
 # ===========================================================================
 # Central mode tests

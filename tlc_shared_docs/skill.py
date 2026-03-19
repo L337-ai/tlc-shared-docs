@@ -394,12 +394,18 @@ tlc-shared-docs list
 tlc-shared-docs get
 tlc-shared-docs get -p agent-coder
 
+# Pull multiple projects at once
+tlc-shared-docs get -p all                    # every configured project
+tlc-shared-docs get -p "agent-coder auth"     # specific subset
+
 # Preview before pulling
 tlc-shared-docs get --dry-run
+tlc-shared-docs get -p all --dry-run
 
 # Remove stale files no longer in the share list
 tlc-shared-docs get --clean
 tlc-shared-docs get -p agent-coder --clean --dry-run
+tlc-shared-docs get -p all --clean            # clean across all projects
 
 # Push changes back to the architecture repo
 tlc-shared-docs push

@@ -19,7 +19,7 @@ commands:
         --dry-run              Preview without making changes
         --clean                Remove local files no longer in the share list
         --central URL          Fetch config from a central repo URL
-        -p, --project NAME     Select a named project (multi-project configs)
+        -p, --project NAME     Project name, space-separated list, or 'all'
 
   push  Push local shared files to the remote repo
         --dry-run              Preview without making changes
@@ -40,6 +40,8 @@ commands:
 examples:
   tlc-shared-docs list                           Show available projects
   tlc-shared-docs get -p agent-coder             Pull docs for a specific project
+  tlc-shared-docs get -p all                    Pull docs for every project
+  tlc-shared-docs get -p "agent-coder auth"      Pull docs for two projects
   tlc-shared-docs get --dry-run                  Preview what would be fetched
   tlc-shared-docs push --force                   Push and overwrite remote changes
   tlc-shared-docs push -p auth --dry-run         Preview push for a project
@@ -78,7 +80,7 @@ def _build_parser() -> argparse.ArgumentParser:
     get_parser.add_argument(
         "-p", "--project",
         default=None,
-        help="Select a named project from shared.json (multi-project configs)",
+        help="Project name, space-separated list of names, or 'all'",
     )
     get_parser.add_argument(
         "--clean",
@@ -148,6 +150,25 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_project_list(project_arg: str | None, root: Path) -> list[str | None]:
+    """Expand a -p argument into a list of project names to process.
+
+    - ``None``  → ``[None]``  (use default_project or single-source)
+    - ``"all"`` → all project names from shared.json
+    - ``"a b"`` → ``["a", "b"]``  (space-separated)
+    - ``"a"``   → ``["a"]``
+    """
+    if project_arg is None:
+        return [None]
+    if project_arg.strip().lower() == "all":
+        projects = cfg.list_projects(root)
+        if not projects:
+            return [None]  # legacy single-source — no named projects
+        # strip " (default)" marker that list_projects appends
+        return [p["name"].replace(" (default)", "") for p in projects]
+    return project_arg.split()
+
+
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the CLI. Parses arguments and dispatches to
     the appropriate get/push handler."""
@@ -188,11 +209,21 @@ def main(argv: list[str] | None = None) -> None:
                     print(f"  {p['name']}  {p['url']}  ({p['branch']}, {p['mode']})")
             return
         elif args.command == "get":
-            messages = get_files(
-                dry_run=args.dry_run, central_url=args.central,
-                project=args.project, clean=args.clean,
-                _print=lambda m: print(m, flush=True),
-            )
+            root = cfg.find_project_root()
+            project_list = _resolve_project_list(args.project, root)
+            messages: list[str] = []
+            for i, project in enumerate(project_list):
+                if len(project_list) > 1:
+                    header = f"\n--- {project or 'default'} ---"
+                    print(header, flush=True)
+                    messages.append(header)
+                proj_msgs = get_files(
+                    project_root=root,
+                    dry_run=args.dry_run, central_url=args.central,
+                    project=project, clean=args.clean,
+                    _print=lambda m: print(m, flush=True),
+                )
+                messages.extend(proj_msgs)
         elif args.command == "push":
             messages = push_files(
                 dry_run=args.dry_run, force=args.force,
