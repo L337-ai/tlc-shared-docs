@@ -138,11 +138,40 @@ Each file defines what that consumer can get and push:
 
 | Field | Description |
 |---|---|
+| `type` | `"project"` (default) or `"peer"` — marks this consumer as a fellow architecture repo rather than a standard project repo |
 | `shared_files[].remote_path` | Path to the file IN THIS REPO |
 | `shared_files[].local_path` | Where the file lands on the consumer side (relative to their shared dir) |
 | `shared_files[].action` | `get` = consumer pulls from here. `push` = consumer pushes back here |
 | `uploads.allowed` | Whether the consumer can upload new files |
 | `uploads.paths` | Glob patterns restricting where new uploads may land |
+
+### Peer consumers
+
+When a fellow architecture repo subscribes to this repo, mark their config
+with `"type": "peer"` and set `"access": "*"`. **Do not specify
+`shared_files`** — the peer controls its own file list:
+
+```json
+{
+  "type": "peer",
+  "access": "*"
+}
+```
+
+**How peer access differs from project access:**
+
+| | Project consumer | Peer consumer |
+|---|---|---|
+| File list controlled by | This repo (`.configs/` entry) | The peer's own `shared.json` |
+| Arch repo config needs | Full `shared_files` list | Just `type: peer` + `access: *` |
+| Can request any file? | No — only listed files | Yes — blanket access |
+
+The peer decides what it needs by listing files in its own `shared.json`.
+Your `.configs/org/peer-repo.json` just grants them access. No WARNING
+about local shared_files is emitted — peer mode is designed for this.
+
+`project` consumers are end-product repos; `peer` consumers are sibling
+architecture repos consuming shared standards or patterns internally.
 
 ### local_path and project-id prefixing
 
@@ -254,6 +283,37 @@ Add an `uploads` section:
 3. Add the appropriate `shared_files` entries
 4. Commit and push — the consumer can now run `tlc-shared-docs get`
 
+### Grant peer access to a fellow architecture repo
+
+Use this when another arch repo needs access to pull from this repo for
+internal use. Unlike project consumers, the peer controls its own file list —
+you just grant access.
+
+**"Give REPO peer access to everything"**
+
+Determine their `org/repo` from their git remote, then create
+`.configs/<org>/<repo>.json`:
+```json
+{
+  "type": "peer",
+  "access": "*"
+}
+```
+Commit and push. The peer can now request any file in this repo via its own
+`shared.json` entries.
+
+**"Give REPO peer access to just FOLDER"**
+
+Use a glob pattern to scope the grant:
+```json
+{
+  "type": "peer",
+  "access": "repo_docs/**"
+}
+```
+The peer may only request files matching `repo_docs/**`. Requests outside
+that scope are denied and reported at get-time. Commit and push.
+
 ### Check who receives a specific file
 
 ```bash
@@ -316,14 +376,52 @@ understand which projects and sources are configured.
       "source_repo": { "url": "https://github.com/org/agent-coder-arch.git" },
       "mode": "central"
     },
-    "auth": {
-      "source_repo": { "url": "https://github.com/org/tlc-auth-arch.git" },
-      "mode": "central"
+    "shared-standards": {
+      "source_repo": { "url": "https://github.com/org/standards-arch.git" },
+      "mode": "central",
+      "type": "peer"
     }
   },
   "default_project": "agent-coder"
 }
 ```
+
+The optional `"type"` field marks the nature of each project source:
+- `"project"` (default) — consuming from an architecture repo that owns this domain; the arch repo controls your file list via its `.configs/` entry
+- `"peer"` — consuming from a fellow architecture repo; **you control your own file list** in `shared_files`, the arch repo just grants blanket access
+
+`tlc-shared-docs list` displays `peer` entries with a label so you can tell
+them apart at a glance.
+
+### Peer mode: you own the file list
+
+When `"type": "peer"`, list the files YOU want in the project's `shared_files`.
+The other arch repo's central config just says `"access": "*"` — your list drives
+what gets fetched:
+
+```json
+{
+  "projects": {
+    "shared-standards": {
+      "source_repo": { "url": "https://github.com/org/standards-arch.git", "branch": "main" },
+      "mode": "central",
+      "type": "peer",
+      "shared_files": [
+        { "remote_path": "docs/coding-standards.md", "local_path": "coding-standards.md", "action": "get" },
+        { "remote_path": "docs/api-patterns.md",     "local_path": "api-patterns.md",     "action": "get" }
+      ]
+    }
+  }
+}
+```
+
+In peer mode, `shared_files` IS safe to edit manually — it's your request
+list, not auto-managed by the arch repo. (It will not be overwritten on `get`.)
+
+The other arch repo may restrict your access to a specific folder. If any
+of your requested files fall outside their granted scope, they will be
+reported as `DENIED` at get-time and excluded from the fetch. Ask the arch
+repo maintainer to broaden the access scope if needed.
 
 ### shared_files is auto-populated
 
@@ -396,6 +494,7 @@ tlc-shared-docs get -p agent-coder
 
 # Pull multiple projects at once
 tlc-shared-docs get -p all                    # every configured project
+tlc-shared-docs get -p peers                  # all peer-type projects only
 tlc-shared-docs get -p "agent-coder auth"     # specific subset
 
 # Preview before pulling
@@ -476,6 +575,7 @@ tlc-shared-docs push --dry-run
 
 ```bash
 tlc-shared-docs get -p <project-name>
+tlc-shared-docs get -p all               # every configured project
 ```
 
 ### Clean up stale files
@@ -505,4 +605,87 @@ tlc-shared-docs get --dry-run -p <project-name>
 
 Look at which subdirectory it's under in `docs/source/shared/`. Each
 subdirectory corresponds to a project name in `shared.json`.
+
+---
+
+## Getting a specific file from an architecture repo
+
+When the user gives you a URL or path and a desired local destination — e.g.:
+
+> "I need https://github.com/L337-ai/tlc-auth-arch/blob/service-account-mvp/003-architecture-reference.md at repo_docs/shared-arch-reference.md"
+
+Follow these steps:
+
+### Step 1 — Parse the request
+
+Extract from the URL or description:
+- **Repo URL**: `https://github.com/L337-ai/tlc-auth-arch`
+- **Branch**: `service-account-mvp` (the segment after `/blob/`)
+- **Remote path**: `003-architecture-reference.md` (everything after the branch)
+- **Local path**: `repo_docs/shared-arch-reference.md` (what the user specified)
+
+### Step 2 — Find the project in shared.json
+
+Read `docs/source/shared/shared.json`. Look for a project entry whose
+`source_repo.url` matches the repo URL. If found, note its name and `type`.
+If not found, treat it as `"project"` type (you have no pre-existing access).
+
+### Step 3 — Check the branch
+
+If the project is configured but its `source_repo.branch` differs from the
+branch in the URL, ask the user whether to switch:
+```bash
+tlc-shared-docs branch service-account-mvp -p <project-name>
+```
+
+### Step 4a — If `type` is `"project"` (or repo not yet in shared.json)
+
+You cannot add files to a project consumer's list yourself — the architecture
+repo controls it. Tell the user:
+
+> "To get this file, the arch repo maintainer needs to add this entry to
+> `.configs/<your-org>/<your-repo>.json` in their repo:"
+
+```json
+{
+  "remote_path": "003-architecture-reference.md",
+  "local_path": "repo_docs/shared-arch-reference.md",
+  "action": "get"
+}
+```
+
+Once they confirm it is added, run:
+```bash
+tlc-shared-docs get -p <project-name>
+```
+
+### Step 4b — If `type` is `"peer"`
+
+You control your own file list. Proceed in three sub-steps:
+
+**1. Add the entry to shared.json** under the project's `shared_files`:
+```json
+{
+  "remote_path": "003-architecture-reference.md",
+  "local_path": "repo_docs/shared-arch-reference.md",
+  "action": "get"
+}
+```
+
+**2. Test access with a dry-run:**
+```bash
+tlc-shared-docs get -p <project-name> --dry-run
+```
+- If output contains `DENIED` → the file is outside your granted access scope.
+  Remove the entry you just added and tell the user to ask the arch repo to
+  broaden peer access (e.g., `"access": "*"` or `"access": "003-*"`).
+- If output shows the file as a planned fetch → access is confirmed.
+
+**3. Pull the file:**
+```bash
+tlc-shared-docs get -p <project-name>
+```
+
+The file lands at `docs/source/shared/<project-name>/repo_docs/shared-arch-reference.md`
+(the project subdirectory is auto-prefixed).
 """)

@@ -643,6 +643,54 @@ class TestCLI:
         assert "--- alpha ---" in output
         assert "--- beta ---" in output
 
+    def test_get_peers_only_iterates_peer_type_projects(self, fake_project, capsys):
+        from tlc_shared_docs.cli import main
+
+        root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "alpha": {"source_repo": {"url": "https://example.com/alpha.git"}, "shared_files": [], "type": "peer"},
+                "beta":  {"source_repo": {"url": "https://example.com/beta.git"},  "shared_files": []},  # project (default)
+                "gamma": {"source_repo": {"url": "https://example.com/gamma.git"}, "shared_files": [], "type": "peer"},
+            },
+        }
+        _write_config(shared_dir, config)
+
+        import tlc_shared_docs.config as cfg_mod
+        original_find = cfg_mod.find_project_root
+        cfg_mod.find_project_root = lambda start=None: root
+        try:
+            main(["get", "-p", "peers"])
+        finally:
+            cfg_mod.find_project_root = original_find
+
+        output = capsys.readouterr().out
+        assert "--- alpha ---" in output
+        assert "--- gamma ---" in output
+        assert "--- beta ---" not in output
+
+    def test_get_peers_with_no_peers_prints_message(self, fake_project, capsys):
+        from tlc_shared_docs.cli import main
+
+        root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "alpha": {"source_repo": {"url": "https://example.com/alpha.git"}, "shared_files": []},
+            },
+        }
+        _write_config(shared_dir, config)
+
+        import tlc_shared_docs.config as cfg_mod
+        original_find = cfg_mod.find_project_root
+        cfg_mod.find_project_root = lambda start=None: root
+        try:
+            main(["get", "-p", "peers"])
+        finally:
+            cfg_mod.find_project_root = original_find
+
+        output = capsys.readouterr().out
+        assert "No peer projects" in output
+
     def test_get_space_separated_projects(self, fake_project, capsys):
         from tlc_shared_docs.cli import main
 

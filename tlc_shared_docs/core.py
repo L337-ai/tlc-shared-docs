@@ -53,8 +53,47 @@ def _resolve_config(
         )
 
     central_data = json.loads(content.decode("utf-8"))
-    central_files = cfg.parse_shared_files(central_data)
+    central_type = central_data.get("type", "project")
     central_uploads = cfg.parse_upload_config(central_data)
+
+    # Peer consumers: the central config grants access rather than specifying
+    # a file list. The peer's own shared.json drives what it fetches.
+    # The "access" field in the central config may restrict which paths the
+    # peer is allowed to request ("*" = everything; a glob = scoped access).
+    if central_type == "peer":
+        access = central_data.get("access", "*")
+
+        if access == "*":
+            allowed_files = conf.shared_files
+            messages.append("Peer access granted — using local shared_files list.")
+        else:
+            # Filter peer's own file list to those within the granted scope
+            allowed_files = [
+                sf for sf in conf.shared_files
+                if cfg.glob_match(sf.remote_path, access)
+            ]
+            denied = [
+                sf.remote_path for sf in conf.shared_files
+                if not cfg.glob_match(sf.remote_path, access)
+            ]
+            for path in denied:
+                messages.append(
+                    f"DENIED: {path} is outside peer access scope '{access}'"
+                )
+            messages.append(
+                f"Peer access granted (scope: {access}) — "
+                f"{len(allowed_files)} file(s) permitted."
+            )
+
+        return cfg.SharedConfig(
+            source_repo=source,
+            shared_files=allowed_files,
+            mode="central",
+            uploads=central_uploads,
+            type="peer",
+        ), messages
+
+    central_files = cfg.parse_shared_files(central_data)
 
     # Warn if local config also had shared_files -- central wins
     if conf.shared_files:
@@ -68,6 +107,7 @@ def _resolve_config(
         shared_files=central_files,
         mode="central",
         uploads=central_uploads,
+        type=central_type,
     ), messages
 
 

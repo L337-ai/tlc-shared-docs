@@ -55,6 +55,7 @@ class SharedConfig:
     shared_files: List[SharedFile] = field(default_factory=list)
     mode: str = "local"  # "local" or "central"
     uploads: Optional[UploadConfig] = None
+    type: str = "project"  # "project" (default) or "peer" (fellow architecture repo)
 
 
 _GLOB_CHARS = set("*?[")
@@ -315,6 +316,7 @@ def _parse_project_entry(data: dict) -> SharedConfig:
         shared_files=parse_shared_files(data),
         mode=data.get("mode", "local"),
         uploads=parse_upload_config(data),
+        type=data.get("type", "project"),
     )
 
 
@@ -343,6 +345,7 @@ def list_projects(project_root: Path) -> List[dict[str, str]]:
             "url": repo.get("url", ""),
             "branch": repo.get("branch", "main"),
             "mode": entry.get("mode", "local"),
+            "type": entry.get("type", "project"),
         })
     return result
 

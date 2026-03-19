@@ -19,7 +19,7 @@ commands:
         --dry-run              Preview without making changes
         --clean                Remove local files no longer in the share list
         --central URL          Fetch config from a central repo URL
-        -p, --project NAME     Project name, space-separated list, or 'all'
+        -p, --project NAME     Project name, space-separated list, 'all', or 'peers'
 
   push  Push local shared files to the remote repo
         --dry-run              Preview without making changes
@@ -40,7 +40,8 @@ commands:
 examples:
   tlc-shared-docs list                           Show available projects
   tlc-shared-docs get -p agent-coder             Pull docs for a specific project
-  tlc-shared-docs get -p all                    Pull docs for every project
+  tlc-shared-docs get -p all                     Pull docs for every project
+  tlc-shared-docs get -p peers                   Pull docs from all peer repos only
   tlc-shared-docs get -p "agent-coder auth"      Pull docs for two projects
   tlc-shared-docs get --dry-run                  Preview what would be fetched
   tlc-shared-docs push --force                   Push and overwrite remote changes
@@ -80,7 +81,7 @@ def _build_parser() -> argparse.ArgumentParser:
     get_parser.add_argument(
         "-p", "--project",
         default=None,
-        help="Project name, space-separated list of names, or 'all'",
+        help="Project name, space-separated list, 'all', or 'peers'",
     )
     get_parser.add_argument(
         "--clean",
@@ -153,19 +154,23 @@ def _build_parser() -> argparse.ArgumentParser:
 def _resolve_project_list(project_arg: str | None, root: Path) -> list[str | None]:
     """Expand a -p argument into a list of project names to process.
 
-    - ``None``  → ``[None]``  (use default_project or single-source)
-    - ``"all"`` → all project names from shared.json
-    - ``"a b"`` → ``["a", "b"]``  (space-separated)
-    - ``"a"``   → ``["a"]``
+    - ``None``         → ``[None]``  (use default_project or single-source)
+    - ``"all"``        → all project names from shared.json
+    - ``"peer"``/``"peers"`` → only projects with type="peer"
+    - ``"a b"``        → ``["a", "b"]``  (space-separated)
+    - ``"a"``          → ``["a"]``
     """
     if project_arg is None:
         return [None]
-    if project_arg.strip().lower() == "all":
-        projects = cfg.list_projects(root)
+    term = project_arg.strip().lower()
+    projects = cfg.list_projects(root)
+    if term == "all":
         if not projects:
             return [None]  # legacy single-source — no named projects
-        # strip " (default)" marker that list_projects appends
         return [p["name"].replace(" (default)", "") for p in projects]
+    if term in ("peer", "peers"):
+        peers = [p for p in projects if p.get("type") == "peer"]
+        return [p["name"].replace(" (default)", "") for p in peers]
     return project_arg.split()
 
 
@@ -206,11 +211,15 @@ def main(argv: list[str] | None = None) -> None:
                 print("Single-source config (no named projects).")
             else:
                 for p in projects:
-                    print(f"  {p['name']}  {p['url']}  ({p['branch']}, {p['mode']})")
+                    type_label = f", {p['type']}" if p.get("type", "project") != "project" else ""
+                    print(f"  {p['name']}  {p['url']}  ({p['branch']}, {p['mode']}{type_label})")
             return
         elif args.command == "get":
             root = cfg.find_project_root()
             project_list = _resolve_project_list(args.project, root)
+            if not project_list:
+                print("No peer projects configured in shared.json.", flush=True)
+                return
             messages: list[str] = []
             for i, project in enumerate(project_list):
                 if len(project_list) > 1:
