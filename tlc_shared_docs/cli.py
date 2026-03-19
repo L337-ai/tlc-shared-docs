@@ -18,6 +18,7 @@ commands:
   get   Pull shared files from the remote repo
         --dry-run              Preview without making changes
         --clean                Remove local files no longer in the share list
+        --bundle NAME          Scope to a single bundle (combine with --dry-run)
         --central URL          Fetch config from a central repo URL
         -p, --project NAME     Project name, space-separated list, 'all', or 'peers'
 
@@ -43,6 +44,7 @@ examples:
   tlc-shared-docs get -p all                     Pull docs for every project
   tlc-shared-docs get -p peers                   Pull docs from all peer repos only
   tlc-shared-docs get -p "agent-coder auth"      Pull docs for two projects
+  tlc-shared-docs get --bundle skills-and-process --dry-run  Preview one bundle
   tlc-shared-docs get --dry-run                  Preview what would be fetched
   tlc-shared-docs push --force                   Push and overwrite remote changes
   tlc-shared-docs push -p auth --dry-run         Preview push for a project
@@ -87,6 +89,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--clean",
         action="store_true",
         help="Remove local files no longer in the shared_files list",
+    )
+    get_parser.add_argument(
+        "--bundle",
+        metavar="NAME",
+        default=None,
+        help="Scope get to a single named bundle (use with --dry-run to preview)",
     )
 
     # --- push: push local shared files to the remote repo ---
@@ -229,7 +237,7 @@ def main(argv: list[str] | None = None) -> None:
                 proj_msgs = get_files(
                     project_root=root,
                     dry_run=args.dry_run, central_url=args.central,
-                    project=project, clean=args.clean,
+                    project=project, clean=args.clean, bundle=args.bundle,
                     _print=lambda m: print(m, flush=True),
                 )
                 messages.extend(proj_msgs)

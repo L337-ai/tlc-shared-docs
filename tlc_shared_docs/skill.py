@@ -319,6 +319,70 @@ that scope are denied and reported at get-time. Commit and push.
 ```bash
 grep -r "architecture.md" .configs/
 ```
+
+---
+
+## Bundles
+
+Bundles are named, reusable collections of files defined in `.configs/bundles/`.
+Use them when many consumers share the same set of docs — instead of
+copy-pasting the same list into every `.configs/org/repo.json`, reference
+the bundle by name.
+
+### Creating a bundle
+
+Create `.configs/bundles/<bundle-name>.json`:
+
+```json
+{
+  "description": "Standard agent skills and process docs",
+  "shared_files": [
+    { "remote_path": "docs/coding-standards.md", "local_path": "coding-standards.md" },
+    { "remote_path": "docs/sprint-process.md",   "local_path": "process/sprint.md" },
+    { "remote_path": "docs/api-patterns.md",     "local_path": "api-patterns.md" }
+  ]
+}
+```
+
+**No `action` field** — bundle files are always `get`. Do not add `"action"` to
+bundle entries; it is implied and ignored if present.
+
+### Referencing a bundle in a consumer config
+
+In `.configs/org/repo.json`, mix bundle references with individual files:
+
+```json
+{
+  "shared_files": [
+    { "bundle": "skills-and-process" },
+    { "bundle": "architecture-patterns" },
+    { "remote_path": "docs/consumer-specific.md", "local_path": "specific.md", "action": "get" }
+  ]
+}
+```
+
+At get-time, each `{ "bundle": "name" }` entry is fetched and inlined.
+Duplicate files (same remote path AND same local path) are silently
+de-duplicated — safe to include overlapping bundles.
+
+### Naming conventions
+
+- Use kebab-case: `skills-and-process`, `architecture-patterns`
+- One bundle per concern — keep them focused so consumers can mix and match
+- Document the bundle's purpose in the `"description"` field
+
+### Audit which consumers use a bundle
+
+```bash
+grep -r "\"bundle\": \"skills-and-process\"" .configs/
+```
+
+### Troubleshooting a missing bundle
+
+If a consumer reports `WARNING: Bundle 'name' not found`, check:
+1. The file exists at `.configs/bundles/name.json` in this repo
+2. It is committed and pushed to the branch the consumer is pointed at
+3. The bundle name in the consumer config matches the filename exactly (case-sensitive)
 """)
 
 # ---------------------------------------------------------------------------
@@ -500,6 +564,10 @@ tlc-shared-docs get -p "agent-coder auth"     # specific subset
 # Preview before pulling
 tlc-shared-docs get --dry-run
 tlc-shared-docs get -p all --dry-run
+
+# Preview a single bundle (shows NEW / OVERWRITE per file)
+tlc-shared-docs get --bundle skills-and-process --dry-run
+tlc-shared-docs get -p agent-coder --bundle skills-and-process --dry-run
 
 # Remove stale files no longer in the share list
 tlc-shared-docs get --clean

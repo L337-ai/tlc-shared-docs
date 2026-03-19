@@ -17,6 +17,7 @@ SHARED_DIR = Path("docs") / "source" / "shared"
 CONFIG_FILE = "shared.json"
 HASHES_FILE = ".shared-hashes.json"
 CENTRAL_CONFIG_DIR = ".configs"
+BUNDLES_DIR = ".configs/bundles"
 
 # .gitignore content for the shared directory:
 # ignore everything except the config and .gitignore itself
@@ -40,6 +41,7 @@ class SharedFile:
     remote_path: str
     local_path: str
     action: str = "get"  # "get" or "push"
+    bundle: Optional[str] = None  # name of the bundle this file came from, if any
 
 
 @dataclass
@@ -230,10 +232,26 @@ def central_config_path(org_repo: str) -> str:
     return f"{CENTRAL_CONFIG_DIR}/{org_repo}.json"
 
 
+def bundle_config_path(bundle_name: str) -> str:
+    """Return the path inside the source repo where a bundle definition lives.
+
+    Example: ``skills-and-process`` -> ``.configs/bundles/skills-and-process.json``
+    """
+    return f"{BUNDLES_DIR}/{bundle_name}.json"
+
+
 def parse_shared_files(data: dict) -> List[SharedFile]:
-    """Parse the shared_files list from a config dict."""
+    """Parse the shared_files list from a config dict.
+
+    Entries with a ``"bundle"`` key are skipped here — they are resolved
+    in ``core._resolve_config`` where the fetch function is available.
+    Call ``raw_shared_file_entries`` to get the unprocessed list including
+    bundle references.
+    """
     shared_files: List[SharedFile] = []
     for entry in data.get("shared_files", []):
+        if "bundle" in entry:
+            continue  # resolved later with fetch access
         shared_files.append(
             SharedFile(
                 remote_path=entry["remote_path"],
@@ -242,6 +260,30 @@ def parse_shared_files(data: dict) -> List[SharedFile]:
             )
         )
     return shared_files
+
+
+def raw_shared_file_entries(data: dict) -> List[dict]:
+    """Return the raw shared_files list including unresolved bundle entries."""
+    return data.get("shared_files", [])
+
+
+def parse_bundle_files(data: dict, bundle_name: str) -> List[SharedFile]:
+    """Parse a bundle definition's file list.
+
+    Bundle entries always have ``action='get'`` — bundles are read-only
+    collections; the action field is not stored and need not be specified.
+    """
+    files: List[SharedFile] = []
+    for entry in data.get("shared_files", []):
+        files.append(
+            SharedFile(
+                remote_path=entry["remote_path"],
+                local_path=entry["local_path"],
+                action="get",
+                bundle=bundle_name,
+            )
+        )
+    return files
 
 
 def parse_upload_config(data: dict) -> Optional[UploadConfig]:

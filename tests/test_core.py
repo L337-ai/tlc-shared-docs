@@ -9,7 +9,7 @@ from typing import List
 import pytest
 
 from tlc_shared_docs.config import SharedConfig, SharedFile, SourceRepo, UploadConfig, save_hashes, load_hashes
-from tlc_shared_docs.core import _discover_uploadable_files, _resolve_config, get_files, push_files
+from tlc_shared_docs.core import _discover_uploadable_files, _resolve_bundles, _resolve_config, get_files, push_files
 
 
 # ---------------------------------------------------------------------------
@@ -1341,3 +1341,236 @@ class TestCentralGetWritesBackSharedFiles:
         )
 
         assert any("Updated shared.json" in m and "2 file(s)" in m for m in messages)
+
+
+# ===========================================================================
+# Bundle tests
+# ===========================================================================
+
+
+class TestResolveBundles:
+    """Tests for _resolve_bundles — expanding bundle entries into SharedFile lists."""
+
+    def _source(self):
+        return SourceRepo(url="https://example.com/arch.git", branch="main")
+
+    def _bundle_json(self, files):
+        """Build a minimal bundle JSON payload."""
+        return json.dumps({"shared_files": files}).encode()
+
+    def test_plain_entry_passes_through(self):
+        entries = [{"remote_path": "docs/a.md", "local_path": "a.md", "action": "get"}]
+        msgs: list = []
+        result = _resolve_bundles(entries, self._source(), lambda u, b, p: None, msgs)
+        assert len(result) == 1
+        assert result[0].remote_path == "docs/a.md"
+        assert result[0].bundle is None
+
+    def test_bundle_entry_is_expanded(self):
+        bundle_content = self._bundle_json([
+            {"remote_path": "docs/x.md", "local_path": "x.md"},
+            {"remote_path": "docs/y.md", "local_path": "y.md"},
+        ])
+        entries = [{"bundle": "my-bundle"}]
+        msgs: list = []
+        result = _resolve_bundles(
+            entries, self._source(),
+            lambda u, b, p: bundle_content,
+            msgs,
+        )
+        assert len(result) == 2
+        assert all(sf.bundle == "my-bundle" for sf in result)
+        assert any("my-bundle" in m and "2 file(s)" in m for m in msgs)
+
+    def test_bundle_files_always_have_action_get(self):
+        bundle_content = self._bundle_json([
+            {"remote_path": "docs/a.md", "local_path": "a.md"},
+        ])
+        result = _resolve_bundles(
+            [{"bundle": "skills"}], self._source(),
+            lambda u, b, p: bundle_content,
+            [],
+        )
+        assert result[0].action == "get"
+
+    def test_duplicate_remote_and_local_path_deduplicated(self):
+        """Same (remote, local) from two bundles — second is silently dropped."""
+        bundle_content = self._bundle_json([
+            {"remote_path": "docs/shared.md", "local_path": "shared.md"},
+        ])
+        entries = [{"bundle": "bundle-a"}, {"bundle": "bundle-b"}]
+
+        call_count = [0]
+
+        def fake_fetch(u, b, p):
+            call_count[0] += 1
+            return bundle_content
+
+        msgs: list = []
+        result = _resolve_bundles(entries, self._source(), fake_fetch, msgs)
+        assert len(result) == 1  # deduplicated
+        assert result[0].remote_path == "docs/shared.md"
+
+    def test_same_remote_different_local_both_kept(self):
+        """Same remote_path to two different local destinations — both valid."""
+        bundle_a = self._bundle_json([{"remote_path": "docs/base.md", "local_path": "dest-a.md"}])
+        bundle_b = self._bundle_json([{"remote_path": "docs/base.md", "local_path": "dest-b.md"}])
+
+        def fake_fetch(u, b, p):
+            return bundle_a if "bundle-a" in p else bundle_b
+
+        result = _resolve_bundles(
+            [{"bundle": "bundle-a"}, {"bundle": "bundle-b"}],
+            self._source(), fake_fetch, [],
+        )
+        assert len(result) == 2
+        local_paths = {sf.local_path for sf in result}
+        assert local_paths == {"dest-a.md", "dest-b.md"}
+
+    def test_missing_bundle_emits_warning_and_continues(self):
+        entries = [
+            {"bundle": "missing-bundle"},
+            {"remote_path": "docs/a.md", "local_path": "a.md", "action": "get"},
+        ]
+        msgs: list = []
+        result = _resolve_bundles(entries, self._source(), lambda u, b, p: None, msgs)
+        assert any("WARNING" in m and "missing-bundle" in m for m in msgs)
+        # Plain entry still included
+        assert len(result) == 1
+        assert result[0].remote_path == "docs/a.md"
+
+    def test_bundle_fetched_once_when_referenced_twice(self):
+        bundle_content = self._bundle_json([{"remote_path": "docs/a.md", "local_path": "a.md"}])
+        call_count = [0]
+
+        def counting_fetch(u, b, p):
+            if "bundles" in p:
+                call_count[0] += 1
+            return bundle_content
+
+        _resolve_bundles(
+            [{"bundle": "shared"}, {"bundle": "shared"}],
+            self._source(), counting_fetch, [],
+        )
+        assert call_count[0] == 1  # fetched exactly once despite two references
+
+    def test_mixed_plain_and_bundle_entries(self):
+        bundle_content = self._bundle_json([
+            {"remote_path": "bundle/file.md", "local_path": "file.md"},
+        ])
+        entries = [
+            {"remote_path": "plain/a.md", "local_path": "a.md", "action": "get"},
+            {"bundle": "my-bundle"},
+            {"remote_path": "plain/b.md", "local_path": "b.md", "action": "push"},
+        ]
+        result = _resolve_bundles(
+            entries, self._source(),
+            lambda u, b, p: bundle_content,
+            [],
+        )
+        remote_paths = [sf.remote_path for sf in result]
+        assert "plain/a.md" in remote_paths
+        assert "bundle/file.md" in remote_paths
+        assert "plain/b.md" in remote_paths
+
+
+class TestBundleFilterInGetFiles:
+    """Tests for --bundle flag scoping get_files to a single bundle."""
+
+    def _central_config_with_bundle(self):
+        return {
+            "shared_files": [
+                {"bundle": "skills-bundle"},
+                {"remote_path": "docs/other.md", "local_path": "other.md", "action": "get"},
+            ]
+        }
+
+    def _bundle_json(self):
+        return json.dumps({
+            "shared_files": [
+                {"remote_path": "docs/skill1.md", "local_path": "skill1.md"},
+                {"remote_path": "docs/skill2.md", "local_path": "skill2.md"},
+            ]
+        }).encode()
+
+    def test_bundle_filter_scopes_to_named_bundle(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, _make_config(mode="central"))
+
+        fetch_calls: list = []
+
+        def fake_fetch(u, b, p):
+            fetch_calls.append(p)
+            if "bundles" in p:
+                return self._bundle_json()
+            return json.dumps(self._central_config_with_bundle()).encode()
+
+        stub = StubGitOps(
+            remote_shas={"docs/skill1.md": "sha1", "docs/skill2.md": "sha2"},
+        )
+        messages = get_files(
+            project_root=root, dry_run=True,
+            bundle="skills-bundle",
+            _get_shas=stub.get_remote_blob_shas,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=fake_fetch,
+        )
+        # Should mention the bundle scope
+        assert any("skills-bundle" in m and "scoped" in m for m in messages)
+        # Bundle files appear in dry-run output
+        assert any("skill1.md" in m for m in messages)
+        # The non-bundle file is excluded
+        assert not any("other.md" in m for m in messages)
+
+    def test_bundle_filter_missing_bundle_emits_message(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, _make_config(mode="central"))
+
+        # Central config has no bundles at all
+        central_data = {"shared_files": [
+            {"remote_path": "docs/a.md", "local_path": "a.md", "action": "get"},
+        ]}
+
+        stub = StubGitOps(
+            fetch_file_result=json.dumps(central_data).encode(),
+            remote_shas={"docs/a.md": "sha1"},
+        )
+        messages = get_files(
+            project_root=root, dry_run=True,
+            bundle="nonexistent-bundle",
+            _get_shas=stub.get_remote_blob_shas,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=stub.fetch_single_file,
+        )
+        assert any("nonexistent-bundle" in m and ("not found" in m or "no get entries" in m) for m in messages)
+
+
+class TestDryRunNewVsOverwrite:
+    """dry-run output distinguishes NEW from OVERWRITE based on local file existence."""
+
+    def test_new_label_when_local_file_absent(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, _make_config(
+            shared_files=[{"remote_path": "docs/fresh.md", "local_path": "fresh.md", "action": "get"}]
+        ))
+        stub = StubGitOps(remote_shas={"docs/fresh.md": "sha1"})
+        messages = get_files(
+            project_root=root, dry_run=True,
+            _get_shas=stub.get_remote_blob_shas,
+        )
+        assert any("[dry-run] NEW:" in m and "fresh.md" in m for m in messages)
+
+    def test_overwrite_label_when_local_file_exists(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, _make_config(
+            shared_files=[{"remote_path": "docs/existing.md", "local_path": "existing.md", "action": "get"}]
+        ))
+        # Pre-create the local file; SHA differs so it will be re-fetched
+        (shared_dir / "existing.md").write_text("old content")
+
+        stub = StubGitOps(remote_shas={"docs/existing.md": "new-sha"})
+        messages = get_files(
+            project_root=root, dry_run=True,
+            _get_shas=stub.get_remote_blob_shas,
+        )
+        assert any("[dry-run] OVERWRITE:" in m and "existing.md" in m for m in messages)

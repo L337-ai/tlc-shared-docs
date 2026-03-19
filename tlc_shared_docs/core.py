@@ -93,7 +93,12 @@ def _resolve_config(
             type="peer",
         ), messages
 
-    central_files = cfg.parse_shared_files(central_data)
+    central_files = _resolve_bundles(
+        cfg.raw_shared_file_entries(central_data),
+        source,
+        _fetch_file,
+        messages,
+    )
 
     # Warn if local config also had shared_files -- central wins
     if conf.shared_files:
@@ -109,6 +114,61 @@ def _resolve_config(
         uploads=central_uploads,
         type=central_type,
     ), messages
+
+
+def _resolve_bundles(
+    raw_entries: List[dict],
+    source: cfg.SourceRepo,
+    _fetch_file: Callable[..., bytes | None],
+    messages: List[str],
+) -> List[cfg.SharedFile]:
+    """Expand ``{"bundle": "name"}`` entries into concrete SharedFile objects.
+
+    Fetches each bundle definition from the source repo on first reference
+    (cached for the duration of the call).  Deduplicates on
+    ``(remote_path, local_path)`` pairs — same file to same destination is
+    silently skipped.  Same file to a different destination is kept (valid
+    use-case).  Bundle files are always ``action='get'``.
+    """
+    result: List[cfg.SharedFile] = []
+    seen: set[tuple[str, str]] = set()
+    bundle_cache: dict[str, List[cfg.SharedFile]] = {}
+
+    for entry in raw_entries:
+        if "bundle" in entry:
+            name = entry["bundle"]
+            if name not in bundle_cache:
+                path = cfg.bundle_config_path(name)
+                content = _fetch_file(source.url, source.branch, path)
+                if content is None:
+                    messages.append(
+                        f"WARNING: Bundle '{name}' not found at {path} "
+                        f"in {source.url} ({source.branch})"
+                    )
+                    bundle_cache[name] = []
+                else:
+                    data = json.loads(content.decode("utf-8"))
+                    bundle_cache[name] = cfg.parse_bundle_files(data, name)
+                    messages.append(
+                        f"Bundle '{name}': {len(bundle_cache[name])} file(s)"
+                    )
+            for sf in bundle_cache[name]:
+                key = (sf.remote_path, sf.local_path)
+                if key not in seen:
+                    seen.add(key)
+                    result.append(sf)
+        else:
+            sf = cfg.SharedFile(
+                remote_path=entry["remote_path"],
+                local_path=entry["local_path"],
+                action=entry.get("action", "get"),
+            )
+            key = (sf.remote_path, sf.local_path)
+            if key not in seen:
+                seen.add(key)
+                result.append(sf)
+
+    return result
 
 
 def _expand_get_entries(
@@ -179,6 +239,7 @@ def get_files(
     central_url: Optional[str] = None,
     project: Optional[str] = None,
     clean: bool = False,
+    bundle: Optional[str] = None,
     _get_shas: Callable[..., dict[str, str]] = git_ops.get_remote_blob_shas,
     _sparse_checkout: Callable[..., tuple] = git_ops.sparse_checkout_files,
     _read_clone: Callable[..., bytes] = git_ops.read_file_from_clone,
@@ -226,11 +287,20 @@ def get_files(
     # In central mode, write the resolved file list back to shared.json so
     # the consumer can inspect what the architecture repo is sharing and agents
     # know which docs to keep current. Globs are expanded; push entries preserved.
-    if conf.mode == "central" and not dry_run:
+    if conf.mode == "central" and not dry_run and not bundle:
         push_entries = [sf for sf in conf.shared_files if sf.action != "get"]
         all_resolved = files_to_get + push_entries
         cfg.update_project_shared_files(root, project, all_resolved)
         emit(f"Updated shared.json: {len(all_resolved)} file(s) recorded from central config.")
+
+    # If --bundle is specified, scope to just that bundle's files
+    if bundle:
+        all_count = len(files_to_get)
+        files_to_get = [sf for sf in files_to_get if sf.bundle == bundle]
+        if not files_to_get:
+            emit(f"Bundle '{bundle}' not found or contains no get entries.")
+            return messages
+        emit(f"Bundle '{bundle}': scoped to {len(files_to_get)} of {all_count} file(s).")
 
     files_needed: List[cfg.SharedFile] = []
     skipped = 0
@@ -243,15 +313,17 @@ def get_files(
             return messages
         # With --clean, continue even with no get entries (to remove stale files)
     else:
-        remote_paths = [f.remote_path for f in files_to_get]
+        # Deduplicate remote_paths for the SHA check — same remote file may map
+        # to multiple local destinations (valid), but we only need one SHA lookup.
+        unique_remote_paths = list(dict.fromkeys(sf.remote_path for sf in files_to_get))
 
         # Query remote blob SHAs to detect unchanged files (cheap, no blobs)
-        emit(f"Checking for changes ({len(remote_paths)} file(s))...")
+        emit(f"Checking for changes ({len(unique_remote_paths)} remote file(s))...")
         stored_hashes = cfg.load_hashes(root)
         remote_shas = _get_shas(
             conf.source_repo.url,
             conf.source_repo.branch,
-            remote_paths,
+            unique_remote_paths,
         )
 
         # Filter: only fetch files whose SHA changed or that don't exist locally
@@ -268,10 +340,12 @@ def get_files(
             else:
                 files_needed.append(sf)
 
-        # Dry-run: show what would be fetched (but don't return yet — clean may follow)
+        # Dry-run: show what would be fetched with NEW vs OVERWRITE distinction
         if dry_run:
             for sf in files_needed:
-                emit(f"[dry-run] Would get: {sf.remote_path}")
+                local = cfg.resolve_local_path(root, sf.local_path)
+                verb = "OVERWRITE" if local.exists() else "NEW"
+                emit(f"[dry-run] {verb}: {sf.remote_path} -> {local.relative_to(root)}")
 
     if dry_run:
         pass  # skip download in dry-run mode
@@ -279,22 +353,32 @@ def get_files(
         if files_to_get:
             emit("All files up to date.")
     else:
-        # Sparse-checkout only the files that actually changed
-        emit(f"Downloading {len(files_needed)} changed file(s)...")
-        needed_paths = [sf.remote_path for sf in files_needed]
+        # Deduplicate remote paths for sparse checkout — only fetch each unique
+        # remote file once even if it maps to multiple local destinations.
+        needed_unique_paths = list(dict.fromkeys(sf.remote_path for sf in files_needed))
+        emit(f"Downloading {len(needed_unique_paths)} remote file(s) "
+             f"({len(files_needed)} destination(s))...")
         clone_dir, _repo = _sparse_checkout(
             conf.source_repo.url,
             conf.source_repo.branch,
-            needed_paths,
+            needed_unique_paths,
         )
+
+        # Cache fetched content so the same remote file isn't read twice
+        content_cache: dict[str, bytes] = {}
 
         try:
             for sf in files_needed:
-                try:
-                    content = _read_clone(clone_dir, sf.remote_path)
-                except FileNotFoundError:
-                    emit(f"WARNING: Remote file not found: {sf.remote_path}")
-                    continue
+                if sf.remote_path not in content_cache:
+                    try:
+                        content_cache[sf.remote_path] = _read_clone(clone_dir, sf.remote_path)
+                    except FileNotFoundError:
+                        emit(f"WARNING: Remote file not found: {sf.remote_path}")
+                        content_cache[sf.remote_path] = b""  # mark as failed
+                        continue
+                content = content_cache[sf.remote_path]
+                if not content:
+                    continue  # already warned above
 
                 # Write the fetched content to the local destination
                 local = cfg.resolve_local_path(root, sf.local_path)
