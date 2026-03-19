@@ -147,9 +147,11 @@ Each file defines what that consumer can get and push:
 
 ### Peer consumers
 
-When a fellow architecture repo subscribes to this repo, mark their config
-with `"type": "peer"` and set `"access": "*"`. **Do not specify
-`shared_files`** — the peer controls its own file list:
+A **peer** is a fellow architecture repo that subscribes to this repo. Unlike
+project consumers (where YOU control the file list), a peer controls its own
+file list in its own `shared.json` — your `.configs/` entry just grants access.
+
+**Your config for a peer is minimal:**
 
 ```json
 {
@@ -158,17 +160,25 @@ with `"type": "peer"` and set `"access": "*"`. **Do not specify
 }
 ```
 
+That's it. No `shared_files` — the peer decides what it needs. Your file
+grants blanket access to everything in this repo. To restrict access to a
+specific folder, use a glob:
+
+```json
+{
+  "type": "peer",
+  "access": "repo_docs/**"
+}
+```
+
 **How peer access differs from project access:**
 
 | | Project consumer | Peer consumer |
 |---|---|---|
 | File list controlled by | This repo (`.configs/` entry) | The peer's own `shared.json` |
-| Arch repo config needs | Full `shared_files` list | Just `type: peer` + `access: *` |
-| Can request any file? | No — only listed files | Yes — blanket access |
-
-The peer decides what it needs by listing files in its own `shared.json`.
-Your `.configs/org/peer-repo.json` just grants them access. No WARNING
-about local shared_files is emitted — peer mode is designed for this.
+| Your config needs | Full `shared_files` list | Just `type: peer` + `access` |
+| Peer can request any file? | No — only what you listed | Yes (within `access` scope) |
+| Peer can use bundles? | N/A — you reference bundles for them | Yes — peer lists `{"bundle": "name"}` in their own `shared.json` |
 
 `project` consumers are end-product repos; `peer` consumers are sibling
 architecture repos consuming shared standards or patterns internally.
@@ -326,12 +336,12 @@ grep -r "architecture.md" .configs/
 
 Bundles are named, reusable collections of files defined in `.configs/bundles/`.
 Use them when many consumers share the same set of docs — instead of
-copy-pasting the same list into every `.configs/org/repo.json`, reference
-the bundle by name.
+copy-pasting the same list into every consumer config, define the list once
+and reference it by name.
 
 ### Creating a bundle
 
-Create `.configs/bundles/<bundle-name>.json`:
+Create `.configs/bundles/<bundle-name>.json` in this repo:
 
 ```json
 {
@@ -345,9 +355,20 @@ Create `.configs/bundles/<bundle-name>.json`:
 ```
 
 **No `action` field** — bundle files are always `get`. Do not add `"action"` to
-bundle entries; it is implied and ignored if present.
+bundle entries; it is implied.
 
-### Referencing a bundle in a consumer config
+### Who can reference a bundle?
+
+Bundles are always stored in THIS repo (`.configs/bundles/`). Any consumer
+can reference them — **project consumers AND peer consumers** — but they do
+so in different places:
+
+| Consumer type | Where the bundle ref goes | Who writes it |
+|---|---|---|
+| **Project** | `.configs/org/repo.json` in THIS repo | You (Player 1) |
+| **Peer** | The peer's own `shared.json` | The peer (Player 2) |
+
+### For project consumers: reference bundles in your config entry
 
 In `.configs/org/repo.json`, mix bundle references with individual files:
 
@@ -361,9 +382,30 @@ In `.configs/org/repo.json`, mix bundle references with individual files:
 }
 ```
 
-At get-time, each `{ "bundle": "name" }` entry is fetched and inlined.
-Duplicate files (same remote path AND same local path) are silently
-de-duplicated — safe to include overlapping bundles.
+When the project consumer runs `tlc-shared-docs get`, the tool fetches and
+inlines all bundle files alongside the individual entries.
+
+### For peer consumers: they reference bundles themselves
+
+Peer consumers write `{"bundle": "name"}` directly in their own `shared.json`.
+Your only responsibility is ensuring:
+1. The bundle file exists at `.configs/bundles/name.json` (committed and pushed)
+2. The peer's access grant covers the files in the bundle
+
+```json
+{
+  "type": "peer",
+  "access": "*"
+}
+```
+
+The peer then controls everything else from their side. See Player 2 docs for details.
+
+### Deduplication
+
+Duplicate files (same `remote_path` AND same `local_path`) are silently
+dropped — safe to reference overlapping bundles. The same file to a different
+local destination is kept (two destinations = two fetches = both valid).
 
 ### Naming conventions
 
@@ -450,18 +492,52 @@ understand which projects and sources are configured.
 }
 ```
 
-The optional `"type"` field marks the nature of each project source:
-- `"project"` (default) — consuming from an architecture repo that owns this domain; the arch repo controls your file list via its `.configs/` entry
-- `"peer"` — consuming from a fellow architecture repo; **you control your own file list** in `shared_files`, the arch repo just grants blanket access
+The `"type"` field marks how this repo relates to the source:
+
+| `type` | Meaning | Who controls the file list? |
+|---|---|---|
+| `"project"` (default) | Consuming from an arch repo that owns this domain | The arch repo — via its `.configs/<org>/<your-repo>.json` |
+| `"peer"` | Consuming from a fellow architecture repo | **You** — via your own `shared_files` in this file |
 
 `tlc-shared-docs list` displays `peer` entries with a label so you can tell
 them apart at a glance.
 
-### Peer mode: you own the file list
+---
 
-When `"type": "peer"`, list the files YOU want in the project's `shared_files`.
-The other arch repo's central config just says `"access": "*"` — your list drives
-what gets fetched:
+## Project mode vs Peer mode
+
+### Project mode — arch repo controls the file list
+
+For `"type": "project"` (the default), the architecture repo decides what
+you receive by editing its `.configs/<org>/<your-repo>.json`. You do not
+list files yourself. After every `get`, `tlc-shared-docs` writes the
+resolved list back into your `shared.json` so your agent can see what's
+in scope:
+
+```json
+{
+  "projects": {
+    "agent-coder": {
+      "source_repo": { "url": "https://github.com/org/arch-repo.git" },
+      "mode": "central",
+      "shared_files": [
+        { "remote_path": "docs/guide.md", "local_path": "agent-coder/guide.md", "action": "get" },
+        { "remote_path": "docs/api.md",   "local_path": "agent-coder/api.md",   "action": "push" }
+      ]
+    }
+  }
+}
+```
+
+**Do not manually edit `shared_files` in project mode** — it is overwritten
+on every `get`. Only edit `source_repo`, `mode`, and `default_project` by
+hand (or use `tlc-shared-docs branch`).
+
+### Peer mode — you control the file list
+
+For `"type": "peer"`, you are a fellow architecture repo. The other arch repo's
+central config just grants you access — your `shared_files` is the request list,
+and you own it completely.
 
 ```json
 {
@@ -479,38 +555,54 @@ what gets fetched:
 }
 ```
 
-In peer mode, `shared_files` IS safe to edit manually — it's your request
-list, not auto-managed by the arch repo. (It will not be overwritten on `get`.)
+In peer mode:
+- `shared_files` is **safe to edit manually** — it is never overwritten by `get`
+- Add files by `remote_path`, or reference an entire bundle by name (see below)
+- The arch repo may restrict access to a specific path. Files outside their
+  granted scope are reported as `DENIED` at get-time and excluded from the fetch
 
-The other arch repo may restrict your access to a specific folder. If any
-of your requested files fall outside their granted scope, they will be
-reported as `DENIED` at get-time and excluded from the fetch. Ask the arch
-repo maintainer to broaden the access scope if needed.
+### Peer mode with bundles
 
-### shared_files is auto-populated
-
-After every `get` in central mode, `tlc-shared-docs` writes the resolved
-file list back into `shared.json` under the project's `shared_files` key.
-You do **not** need to list files manually — they appear automatically:
+Instead of listing individual files, a peer can reference a **bundle** — a
+named collection of files defined in the arch repo's `.configs/bundles/`:
 
 ```json
 {
   "projects": {
-    "agent-coder": {
-      "source_repo": { "url": "..." },
+    "shared-standards": {
+      "source_repo": { "url": "https://github.com/org/standards-arch.git" },
       "mode": "central",
+      "type": "peer",
       "shared_files": [
-        { "remote_path": "docs/guide.md", "local_path": "agent-coder/guide.md", "action": "get" },
-        { "remote_path": "docs/api.md",   "local_path": "agent-coder/api.md",   "action": "push" }
+        { "bundle": "skills-and-process" },
+        { "bundle": "architecture-patterns" },
+        { "remote_path": "docs/extra-ref.md", "local_path": "extra-ref.md", "action": "get" }
       ]
     }
   }
 }
 ```
 
-This list tells you — and your AI agent — exactly which documents this
-repo is responsible for keeping current. **Do not manually edit
-`shared_files`; it is overwritten on every `get`.**
+When you run `tlc-shared-docs get -p shared-standards`:
+1. The tool fetches the arch repo's peer grant for this repo (`.configs/<org>/<your-repo>.json`)
+2. For each `{"bundle": "name"}` entry, it fetches `.configs/bundles/name.json` from the arch repo
+3. All files from every bundle (plus any plain entries) are resolved and downloaded
+4. Your `shared_files` is NOT overwritten — the bundle references remain intact for next time
+
+**Bundle files are always `get`** — you do not specify an action.
+
+**Dry-run a bundle before pulling:**
+```bash
+tlc-shared-docs get -p shared-standards --bundle skills-and-process --dry-run
+```
+This shows `NEW` or `OVERWRITE` per file so you can see exactly what will land
+before committing to the fetch.
+
+**Prerequisites for peer + bundle to work:**
+- The arch repo has created `.configs/bundles/name.json` and committed it
+- The arch repo has granted you peer access: `.configs/<your-org>/<your-repo>.json`
+  with `{"type": "peer", "access": "*"}` (or a scoped glob)
+- Your project entry has `"mode": "central"` and `"type": "peer"`
 
 ---
 
@@ -610,11 +702,13 @@ tlc-shared-docs push --dry-run
    without understanding what changed on the remote. Run `get` first to pull
    the latest, then resolve and push again.
 
-8. **`shared_files` in `shared.json` is auto-managed — do not edit it.**
-   Every `get` in central mode overwrites this section with the current list
-   from the architecture repo. **Do** read it to understand which files this
-   repo is syncing, but never write to it manually. Only edit `source_repo`,
-   `mode`, and `default_project` by hand (or use `tlc-shared-docs branch`).
+8. **`shared_files` rules differ by type:**
+   - **Project mode** (`"type": "project"`): `shared_files` is auto-managed.
+     Every `get` overwrites it with the arch repo's current list. Do NOT edit
+     it manually — read it to understand what's in scope, but let `get` maintain it.
+   - **Peer mode** (`"type": "peer"`): `shared_files` is YOUR request list.
+     Edit it freely — add individual files or `{"bundle": "name"}` references.
+     It is never overwritten by `get`.
 
 9. **The `shared_files` list shows which docs need to stay current.**
    After each `get`, read `shared.json` to see which files are in scope.

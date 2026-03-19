@@ -57,23 +57,32 @@ def _resolve_config(
     central_uploads = cfg.parse_upload_config(central_data)
 
     # Peer consumers: the central config grants access rather than specifying
-    # a file list. The peer's own shared.json drives what it fetches.
-    # The "access" field in the central config may restrict which paths the
-    # peer is allowed to request ("*" = everything; a glob = scoped access).
+    # a file list. The peer's own shared.json drives what it fetches,
+    # including any bundle references it contains. Bundles are fetched from
+    # the central repo (source) just like any other file.
+    # The "access" field may restrict which paths the peer may request
+    # ("*" = everything; a glob pattern = scoped access).
     if central_type == "peer":
         access = central_data.get("access", "*")
 
+        # Resolve any {"bundle": "name"} entries from the peer's own config.
+        # conf.raw_file_entries preserves the original list including bundle refs;
+        # conf.shared_files has them stripped (parsed before fetch was available).
+        peer_files = _resolve_bundles(
+            conf.raw_file_entries, source, _fetch_file, messages
+        )
+
         if access == "*":
-            allowed_files = conf.shared_files
+            allowed_files = peer_files
             messages.append("Peer access granted — using local shared_files list.")
         else:
-            # Filter peer's own file list to those within the granted scope
+            # Filter resolved files to those within the granted scope
             allowed_files = [
-                sf for sf in conf.shared_files
+                sf for sf in peer_files
                 if cfg.glob_match(sf.remote_path, access)
             ]
             denied = [
-                sf.remote_path for sf in conf.shared_files
+                sf.remote_path for sf in peer_files
                 if not cfg.glob_match(sf.remote_path, access)
             ]
             for path in denied:
@@ -287,7 +296,9 @@ def get_files(
     # In central mode, write the resolved file list back to shared.json so
     # the consumer can inspect what the architecture repo is sharing and agents
     # know which docs to keep current. Globs are expanded; push entries preserved.
-    if conf.mode == "central" and not dry_run and not bundle:
+    # Skipped for peer consumers — their shared_files list is self-managed;
+    # only the bundle refs they wrote are authoritative, not the expanded result.
+    if conf.mode == "central" and conf.type != "peer" and not dry_run and not bundle:
         push_entries = [sf for sf in conf.shared_files if sf.action != "get"]
         all_resolved = files_to_get + push_entries
         cfg.update_project_shared_files(root, project, all_resolved)

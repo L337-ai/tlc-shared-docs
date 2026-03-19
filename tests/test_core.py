@@ -1545,6 +1545,129 @@ class TestBundleFilterInGetFiles:
         assert any("nonexistent-bundle" in m and ("not found" in m or "no get entries" in m) for m in messages)
 
 
+class TestPeerBundleResolution:
+    """Peer consumers can reference bundles in their own shared.json."""
+
+    def _peer_project_config(self, bundle_name="skills"):
+        """Multi-project shared.json where a peer project references a bundle."""
+        return {
+            "projects": {
+                "arch-standards": {
+                    "source_repo": {"url": "https://example.com/arch.git", "branch": "main"},
+                    "mode": "central",
+                    "type": "peer",
+                    "shared_files": [
+                        {"bundle": bundle_name},
+                        {"remote_path": "docs/extra.md", "local_path": "extra.md", "action": "get"},
+                    ],
+                }
+            },
+            "default_project": "arch-standards",
+        }
+
+    def _central_peer_grant(self):
+        """Central config granting blanket peer access — no shared_files."""
+        return json.dumps({"type": "peer", "access": "*"}).encode()
+
+    def _bundle_content(self):
+        return json.dumps({
+            "description": "Standard skills",
+            "shared_files": [
+                {"remote_path": "docs/skill1.md", "local_path": "skill1.md"},
+                {"remote_path": "docs/skill2.md", "local_path": "skill2.md"},
+            ],
+        }).encode()
+
+    def test_peer_bundle_refs_are_resolved(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, self._peer_project_config())
+
+        def fake_fetch(u, b, p):
+            if "bundles" in p:
+                return self._bundle_content()
+            return self._central_peer_grant()
+
+        stub = StubGitOps(
+            remote_shas={"docs/skill1.md": "s1", "docs/skill2.md": "s2", "docs/extra.md": "s3"},
+        )
+        messages = get_files(
+            project_root=root, project="arch-standards", dry_run=True,
+            _get_shas=stub.get_remote_blob_shas,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=fake_fetch,
+        )
+        # Both bundle files and the plain extra.md should appear
+        assert any("skill1.md" in m for m in messages)
+        assert any("skill2.md" in m for m in messages)
+        assert any("extra.md" in m for m in messages)
+
+    def test_peer_access_scope_filters_bundle_files(self, fake_project):
+        root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "arch-standards": {
+                    "source_repo": {"url": "https://example.com/arch.git"},
+                    "mode": "central",
+                    "type": "peer",
+                    "shared_files": [{"bundle": "skills"}],
+                }
+            },
+            "default_project": "arch-standards",
+        }
+        _write_config(shared_dir, config)
+
+        # Central grants access only to docs/skill1.md scope
+        central_grant = json.dumps({"type": "peer", "access": "docs/skill1.md"}).encode()
+        bundle = json.dumps({"shared_files": [
+            {"remote_path": "docs/skill1.md", "local_path": "skill1.md"},
+            {"remote_path": "docs/skill2.md", "local_path": "skill2.md"},  # outside scope
+        ]}).encode()
+
+        def fake_fetch(u, b, p):
+            return bundle if "bundles" in p else central_grant
+
+        stub = StubGitOps(remote_shas={"docs/skill1.md": "s1"})
+        messages = get_files(
+            project_root=root, project="arch-standards", dry_run=True,
+            _get_shas=stub.get_remote_blob_shas,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=fake_fetch,
+        )
+        assert any("DENIED" in m and "skill2.md" in m for m in messages)
+        assert any("skill1.md" in m for m in messages)
+
+    def test_peer_bundle_does_not_write_back_shared_json(self, fake_project):
+        """Peer shared_files (including bundle refs) must not be overwritten on get."""
+        root, shared_dir = fake_project
+        _write_config(shared_dir, self._peer_project_config())
+        original_text = (shared_dir / "shared.json").read_text()
+
+        def fake_fetch(u, b, p):
+            if "bundles" in p:
+                return self._bundle_content()
+            return self._central_peer_grant()
+
+        stub = StubGitOps(
+            remote_shas={"docs/skill1.md": "s1", "docs/skill2.md": "s2", "docs/extra.md": "s3"},
+            sparse_files={
+                "docs/skill1.md": b"# Skill 1",
+                "docs/skill2.md": b"# Skill 2",
+                "docs/extra.md": b"# Extra",
+            },
+        )
+        get_files(
+            project_root=root, project="arch-standards",
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=fake_fetch,
+        )
+        # shared.json must still contain the original bundle reference, not the expanded list
+        assert (shared_dir / "shared.json").read_text() == original_text
+
+
 class TestDryRunNewVsOverwrite:
     """dry-run output distinguishes NEW from OVERWRITE based on local file existence."""
 

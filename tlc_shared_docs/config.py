@@ -58,6 +58,10 @@ class SharedConfig:
     mode: str = "local"  # "local" or "central"
     uploads: Optional[UploadConfig] = None
     type: str = "project"  # "project" (default) or "peer" (fellow architecture repo)
+    # Raw shared_files list including unresolved {"bundle": "name"} entries.
+    # Populated at parse time so bundle resolution can happen later when a
+    # fetch function is available (e.g., in _resolve_config / get_files).
+    raw_file_entries: List[dict] = field(default_factory=list)
 
 
 _GLOB_CHARS = set("*?[")
@@ -343,6 +347,9 @@ def _prefix_local_paths(conf: SharedConfig, project_name: str) -> SharedConfig:
         shared_files=prefixed,
         mode=conf.mode,
         uploads=conf.uploads,
+        type=conf.type,
+        # Preserve raw entries so bundle resolution can still happen downstream
+        raw_file_entries=conf.raw_file_entries,
     )
 
 
@@ -359,6 +366,8 @@ def _parse_project_entry(data: dict) -> SharedConfig:
         mode=data.get("mode", "local"),
         uploads=parse_upload_config(data),
         type=data.get("type", "project"),
+        # Preserve raw entries (including bundle refs) for later resolution
+        raw_file_entries=raw_shared_file_entries(data),
     )
 
 
