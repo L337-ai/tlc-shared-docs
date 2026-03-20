@@ -510,28 +510,22 @@ them apart at a glance.
 
 For `"type": "project"` (the default), the architecture repo decides what
 you receive by editing its `.configs/<org>/<your-repo>.json`. You do not
-list files yourself. After every `get`, `tlc-shared-docs` writes the
-resolved list back into your `shared.json` so your agent can see what's
-in scope:
+list files yourself — `shared.json` stays clean with just the connection config:
 
 ```json
 {
   "projects": {
     "agent-coder": {
       "source_repo": { "url": "https://github.com/org/arch-repo.git" },
-      "mode": "central",
-      "shared_files": [
-        { "remote_path": "docs/guide.md", "local_path": "agent-coder/guide.md", "action": "get" },
-        { "remote_path": "docs/api.md",   "local_path": "agent-coder/api.md",   "action": "push" }
-      ]
+      "mode": "central"
     }
   }
 }
 ```
 
-**Do not manually edit `shared_files` in project mode** — it is overwritten
-on every `get`. Only edit `source_repo`, `mode`, and `default_project` by
-hand (or use `tlc-shared-docs branch`).
+The arch repo controls what you get and what you push. Run `tlc-shared-docs get`
+to pull the current file list. If the arch repo has assigned you any `push` files,
+the `get` output will list them — run `tlc-shared-docs push` to send them back.
 
 ### Peer mode — you control the file list
 
@@ -703,9 +697,9 @@ tlc-shared-docs push --dry-run
    the latest, then resolve and push again.
 
 8. **`shared_files` rules differ by type:**
-   - **Project mode** (`"type": "project"`): `shared_files` is auto-managed.
-     Every `get` overwrites it with the arch repo's current list. Do NOT edit
-     it manually — read it to understand what's in scope, but let `get` maintain it.
+   - **Project mode** (`"type": "project"`): do not add `shared_files` to the config.
+     The arch repo controls everything via its `.configs/` entry. `shared.json` is
+     never modified by `get` — it stays as the clean connection config you wrote.
    - **Peer mode** (`"type": "peer"`): `shared_files` is YOUR request list.
      Edit it freely — add individual files or `{"bundle": "name"}` references.
      It is never overwritten by `get`.

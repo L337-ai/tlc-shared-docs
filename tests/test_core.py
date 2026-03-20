@@ -1202,10 +1202,11 @@ class TestCentralGetWritesBackSharedFiles:
             "default_project": project_name,
         }
 
-    def test_get_only_writes_push_entries_to_shared_json(self, fake_project):
-        """get entries are not written back — only push entries are recorded."""
+    def test_get_never_modifies_shared_json(self, fake_project):
+        """central get never writes back to shared.json — it is config only."""
         root, shared_dir = fake_project
         _write_config(shared_dir, self._central_config())
+        original_text = (shared_dir / "shared.json").read_text()
 
         central_data = {
             "shared_files": [
@@ -1229,45 +1230,7 @@ class TestCentralGetWritesBackSharedFiles:
             _fetch_file=stub.fetch_single_file,
         )
 
-        data = json.loads((shared_dir / "shared.json").read_text())
-        proj_files = data["projects"]["myproj"]["shared_files"]
-        remote_paths = [e["remote_path"] for e in proj_files]
-        # Only the push entry is written back
-        assert "docs/api.md" in remote_paths
-        assert proj_files[0]["action"] == "push"
-        # The get entry is NOT written back
-        assert "docs/guide.md" not in remote_paths
-
-    def test_get_does_not_write_back_when_no_push_entries(self, fake_project):
-        """If central config has no push entries, shared.json shared_files is cleared."""
-        root, shared_dir = fake_project
-        _write_config(shared_dir, self._central_config())
-
-        central_data = {
-            "shared_files": [
-                {"remote_path": "docs/guide.md", "local_path": "guide.md", "action": "get"}
-            ]
-        }
-
-        stub = StubGitOps(
-            fetch_file_result=json.dumps(central_data).encode(),
-            remote_shas={"docs/guide.md": "sha1"},
-            sparse_files={"docs/guide.md": b"# Guide"},
-        )
-        get_files(
-            project_root=root, project="myproj",
-            _get_shas=stub.get_remote_blob_shas,
-            _sparse_checkout=stub.sparse_checkout_files,
-            _read_clone=stub.read_file_from_clone,
-            _cleanup=stub.cleanup,
-            _detect_identity=_stub_detect_identity,
-            _fetch_file=stub.fetch_single_file,
-        )
-
-        data = json.loads((shared_dir / "shared.json").read_text())
-        proj_files = data["projects"]["myproj"].get("shared_files", [])
-        # No push entries → shared_files is empty (get entries are not recorded)
-        assert proj_files == []
+        assert (shared_dir / "shared.json").read_text() == original_text
 
     def test_dry_run_does_not_write_back(self, fake_project):
         root, shared_dir = fake_project
@@ -1316,63 +1279,6 @@ class TestCentralGetWritesBackSharedFiles:
         # local mode should not modify shared.json
         assert (shared_dir / "shared.json").read_text() == original_text
 
-    def test_write_back_emits_message_only_for_push_entries(self, fake_project):
-        root, shared_dir = fake_project
-        _write_config(shared_dir, self._central_config())
-
-        central_data = {
-            "shared_files": [
-                {"remote_path": "a.md", "local_path": "a.md", "action": "get"},
-                {"remote_path": "b.md", "local_path": "b.md", "action": "push"},
-            ]
-        }
-
-        stub = StubGitOps(
-            fetch_file_result=json.dumps(central_data).encode(),
-            remote_shas={"a.md": "sha1"},
-            sparse_files={"a.md": b"A"},
-        )
-        messages = get_files(
-            project_root=root, project="myproj",
-            _get_shas=stub.get_remote_blob_shas,
-            _sparse_checkout=stub.sparse_checkout_files,
-            _read_clone=stub.read_file_from_clone,
-            _cleanup=stub.cleanup,
-            _detect_identity=_stub_detect_identity,
-            _fetch_file=stub.fetch_single_file,
-        )
-
-        # Message only when push entries exist
-        assert any("Updated shared.json" in m and "1 push file" in m for m in messages)
-
-    def test_write_back_no_message_when_only_get_entries(self, fake_project):
-        root, shared_dir = fake_project
-        _write_config(shared_dir, self._central_config())
-
-        central_data = {
-            "shared_files": [
-                {"remote_path": "a.md", "local_path": "a.md", "action": "get"},
-                {"remote_path": "b.md", "local_path": "b.md", "action": "get"},
-            ]
-        }
-
-        stub = StubGitOps(
-            fetch_file_result=json.dumps(central_data).encode(),
-            remote_shas={"a.md": "sha1", "b.md": "sha2"},
-            sparse_files={"a.md": b"A", "b.md": b"B"},
-        )
-        messages = get_files(
-            project_root=root, project="myproj",
-            _get_shas=stub.get_remote_blob_shas,
-            _sparse_checkout=stub.sparse_checkout_files,
-            _read_clone=stub.read_file_from_clone,
-            _cleanup=stub.cleanup,
-            _detect_identity=_stub_detect_identity,
-            _fetch_file=stub.fetch_single_file,
-        )
-
-        # No push entries → no "Updated shared.json" message
-        assert not any("Updated shared.json" in m for m in messages)
 
 
 # ===========================================================================
