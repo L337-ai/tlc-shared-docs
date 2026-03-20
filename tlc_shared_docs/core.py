@@ -293,16 +293,16 @@ def get_files(
     for m in expand_msgs:
         emit(m)
 
-    # In central mode, write the resolved file list back to shared.json so
-    # the consumer can inspect what the architecture repo is sharing and agents
-    # know which docs to keep current. Globs are expanded; push entries preserved.
-    # Skipped for peer consumers — their shared_files list is self-managed;
-    # only the bundle refs they wrote are authoritative, not the expanded result.
+    # In central mode, write push entries back to shared.json so agents know
+    # which files this repo is responsible for keeping up to date. Only push
+    # entries are recorded — get entries are always re-derived from central
+    # and writing them would create noisy diffs on every run.
+    # Skipped for peer consumers — their shared_files list is self-managed.
     if conf.mode == "central" and conf.type != "peer" and not dry_run and not bundle:
-        push_entries = [sf for sf in conf.shared_files if sf.action != "get"]
-        all_resolved = files_to_get + push_entries
-        cfg.update_project_shared_files(root, project, all_resolved)
-        emit(f"Updated shared.json: {len(all_resolved)} file(s) recorded from central config.")
+        push_entries = [sf for sf in conf.shared_files if sf.action == "push"]
+        cfg.update_project_shared_files(root, project, push_entries)
+        if push_entries:
+            emit(f"Updated shared.json: {len(push_entries)} push file(s) recorded.")
 
     # If --bundle is specified, scope to just that bundle's files
     if bundle:
