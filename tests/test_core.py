@@ -1202,11 +1202,10 @@ class TestCentralGetWritesBackSharedFiles:
             "default_project": project_name,
         }
 
-    def test_get_never_modifies_shared_json(self, fake_project):
-        """central get never writes back to shared.json — it is config only."""
+    def test_get_writes_back_push_entries_only(self, fake_project):
+        """central get writes only push entries to shared.json; get entries are stripped."""
         root, shared_dir = fake_project
         _write_config(shared_dir, self._central_config())
-        original_text = (shared_dir / "shared.json").read_text()
 
         central_data = {
             "shared_files": [
@@ -1230,16 +1229,24 @@ class TestCentralGetWritesBackSharedFiles:
             _fetch_file=stub.fetch_single_file,
         )
 
-        assert (shared_dir / "shared.json").read_text() == original_text
+        result = json.loads((shared_dir / "shared.json").read_text())
+        written = result["projects"]["myproj"].get("shared_files", [])
+        assert len(written) == 1
+        assert written[0]["action"] == "push"
+        assert written[0]["remote_path"] == "docs/api.md"
+        # get entry must not appear
+        assert not any(e["remote_path"] == "docs/guide.md" for e in written)
 
     def test_dry_run_does_not_write_back(self, fake_project):
+        """dry-run must not modify shared.json even when push entries are present."""
         root, shared_dir = fake_project
         _write_config(shared_dir, self._central_config())
         original_text = (shared_dir / "shared.json").read_text()
 
         central_data = {
             "shared_files": [
-                {"remote_path": "docs/guide.md", "local_path": "guide.md", "action": "get"}
+                {"remote_path": "docs/guide.md", "local_path": "guide.md", "action": "get"},
+                {"remote_path": "docs/api.md", "local_path": "api.md", "action": "push"},
             ]
         }
 

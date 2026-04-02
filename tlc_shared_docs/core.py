@@ -431,6 +431,16 @@ def get_files(
     clean_label = f", {cleaned} removed" if clean else ""
     emit(f"Done: {len(files_to_get)} file(s) shared{proj_label}. {updated} updated, {skipped} unchanged{clean_label}.")
 
+    # Write push-only entries back to shared.json so each consumer repo has a
+    # clear record of which files it is responsible for pushing to central.
+    # Get entries are intentionally excluded — central is authoritative and
+    # consumers do not track what they pull. Any existing get entries are
+    # removed. Skipped in dry-run (no side effects) and peer mode (peer owns
+    # its own shared_files list).
+    if conf.mode == "central" and conf.type != "peer" and not dry_run:
+        push_entries = [sf for sf in conf.shared_files if sf.action == "push"]
+        cfg.update_project_shared_files(root, project, push_entries)
+
     return messages
 
 
@@ -649,6 +659,11 @@ def push_files(
     # Summary line
     proj_label = f" to {project}" if project else ""
     emit(f"Done: {len(actually_pushed)} of {len(file_map)} file(s) pushed{proj_label}.")
+
+    # Keep shared.json in sync with push responsibilities. Same rule as get:
+    # only push entries are stored; any stale get entries are removed.
+    if conf.mode == "central" and conf.type != "peer" and not dry_run:
+        cfg.update_project_shared_files(root, project, files_to_push)
 
     return messages
 
