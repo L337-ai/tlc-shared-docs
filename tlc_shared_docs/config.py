@@ -421,8 +421,13 @@ def update_project_shared_files(
         for sf in shared_files
     ]
 
-    if "projects" in data and project and project in data["projects"]:
-        data["projects"][project]["shared_files"] = entries
+    if "projects" in data:
+        # Resolve the effective project name — callers may pass None when
+        # relying on default_project (e.g., `get` with no -p flag).
+        effective = project or data.get("default_project")
+        if effective and effective in data["projects"]:
+            data["projects"][effective]["shared_files"] = entries
+        # else: unrecognised project — don't write anything
     else:
         data["shared_files"] = entries
 

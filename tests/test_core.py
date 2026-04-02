@@ -1264,6 +1264,43 @@ class TestCentralGetWritesBackSharedFiles:
         # shared.json must be unchanged in dry-run mode
         assert (shared_dir / "shared.json").read_text() == original_text
 
+    def test_write_back_uses_default_project_when_no_project_arg(self, fake_project):
+        """Write-back must target the default project when -p is omitted."""
+        root, shared_dir = fake_project
+        # Config has default_project but no explicit project arg passed to get_files
+        _write_config(shared_dir, self._central_config(project_name="myproj"))
+
+        central_data = {
+            "shared_files": [
+                {"remote_path": "docs/guide.md", "local_path": "guide.md", "action": "get"},
+                {"remote_path": "docs/api.md", "local_path": "api.md", "action": "push"},
+            ]
+        }
+
+        stub = StubGitOps(
+            fetch_file_result=json.dumps(central_data).encode(),
+            remote_shas={"docs/guide.md": "sha1"},
+            sparse_files={"docs/guide.md": b"# Guide"},
+        )
+        # project=None — relies on default_project
+        get_files(
+            project_root=root, project=None,
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=stub.fetch_single_file,
+        )
+
+        result = json.loads((shared_dir / "shared.json").read_text())
+        # Must write to projects.myproj.shared_files — NOT root shared_files
+        assert "shared_files" not in result, "Root-level shared_files must not be written"
+        written = result["projects"]["myproj"].get("shared_files", [])
+        assert len(written) == 1
+        assert written[0]["action"] == "push"
+        assert written[0]["remote_path"] == "docs/api.md"
+
     def test_local_mode_does_not_write_back(self, fake_project):
         root, shared_dir = fake_project
         _write_config(shared_dir, _make_config(
