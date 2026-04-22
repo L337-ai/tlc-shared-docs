@@ -30,6 +30,7 @@ def list_remote_files(
     is fetched -- no file blobs are downloaded.
     """
     clone_dir = _tmp_clone_dir()
+    repo = None
     try:
         repo = Repo.init(clone_dir)
         repo.git.remote("add", "origin", url)
@@ -48,6 +49,8 @@ def list_remote_files(
     except GitCommandError as exc:
         raise GitError(f"Failed to list files from {url}: {exc}") from exc
     finally:
+        if repo is not None:
+            repo.close()
         shutil.rmtree(clone_dir, ignore_errors=True)
 
 
@@ -63,6 +66,7 @@ def get_remote_blob_shas(
     tree metadata needed to read the blob SHA per path.
     """
     clone_dir = _tmp_clone_dir()
+    repo = None
     try:
         repo = Repo.init(clone_dir)
         repo.git.remote("add", "origin", url)
@@ -85,6 +89,8 @@ def get_remote_blob_shas(
     except GitCommandError as exc:
         raise GitError(f"Failed to get blob SHAs from {url}: {exc}") from exc
     finally:
+        if repo is not None:
+            repo.close()
         shutil.rmtree(clone_dir, ignore_errors=True)
 
 
@@ -92,13 +98,14 @@ def sparse_checkout_files(
     url: str,
     branch: str,
     file_paths: List[str],
-) -> tuple[Path, Repo]:
+) -> tuple[Path, None]:
     """Clone *url* at *branch* with a **sparse checkout** containing only
     *file_paths*.  Returns ``(clone_dir, Repo)``.
 
     Depth=1 avoids fetching full history -- we only need latest content.
     """
     clone_dir = _tmp_clone_dir()
+    repo = None
     try:
         # Initialise an empty repo and configure sparse-checkout
         repo = Repo.init(clone_dir)
@@ -114,8 +121,13 @@ def sparse_checkout_files(
         repo.git.fetch("origin", branch, depth=1)
         repo.git.checkout(f"origin/{branch}", b=branch)
 
-        return clone_dir, repo
+        # Close before returning — callers only need filesystem files afterward.
+        repo.close()
+        repo = None
+        return clone_dir, None
     except GitCommandError as exc:
+        if repo is not None:
+            repo.close()
         shutil.rmtree(clone_dir, ignore_errors=True)
         raise GitError(f"Failed to sparse-checkout from {url}: {exc}") from exc
 
@@ -150,6 +162,7 @@ def push_files(
             _print(msg)
 
     clone_dir = _tmp_clone_dir()
+    repo = None
     try:
         vlog(f"[verbose] Clone dir: {clone_dir}")
 
@@ -228,6 +241,8 @@ def push_files(
     except GitCommandError as exc:
         raise GitError(f"Failed to push to {url}: {exc}") from exc
     finally:
+        if repo is not None:
+            repo.close()
         shutil.rmtree(clone_dir, ignore_errors=True)
 
 
@@ -238,7 +253,7 @@ def fetch_single_file(url: str, branch: str, file_path: str) -> bytes | None:
     """
     clone_dir = _tmp_clone_dir()
     try:
-        clone_dir, _repo = sparse_checkout_files(url, branch, [file_path])
+        clone_dir, _ = sparse_checkout_files(url, branch, [file_path])
         target = clone_dir / file_path
         if not target.exists():
             return None
