@@ -256,10 +256,11 @@ def parse_shared_files(data: dict) -> List[SharedFile]:
     for entry in data.get("shared_files", []):
         if "bundle" in entry:
             continue  # resolved later with fetch access
+        remote = entry["remote_path"]
         shared_files.append(
             SharedFile(
-                remote_path=entry["remote_path"],
-                local_path=entry["local_path"],
+                remote_path=remote,
+                local_path=entry.get("local_path", remote),
                 action=entry.get("action", "get"),
             )
         )
@@ -279,10 +280,11 @@ def parse_bundle_files(data: dict, bundle_name: str) -> List[SharedFile]:
     """
     files: List[SharedFile] = []
     for entry in data.get("shared_files", []):
+        remote = entry["remote_path"]
         files.append(
             SharedFile(
-                remote_path=entry["remote_path"],
-                local_path=entry["local_path"],
+                remote_path=remote,
+                local_path=entry.get("local_path", remote),
                 action="get",
                 bundle=bundle_name,
             )
@@ -432,6 +434,24 @@ def update_project_shared_files(
         data["shared_files"] = entries
 
     cfg_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def resolve_effective_project(project_root: Path, project: Optional[str]) -> Optional[str]:
+    """Return the effective project name for a multi-project config.
+
+    When *project* is ``None``, falls back to ``default_project`` from
+    shared.json.  Returns ``None`` for legacy single-source configs (no
+    ``projects`` key) or when no default is set.
+    """
+    if project is not None:
+        return project
+    cfg_path = config_path(project_root)
+    if not cfg_path.exists():
+        return None
+    data = json.loads(cfg_path.read_text(encoding="utf-8"))
+    if "projects" not in data:
+        return None
+    return data.get("default_project")
 
 
 def set_branch(project_root: Path, branch: str, project: Optional[str] = None) -> List[str]:

@@ -167,9 +167,10 @@ def _resolve_bundles(
                     seen.add(key)
                     result.append(sf)
         else:
+            remote = entry["remote_path"]
             sf = cfg.SharedFile(
-                remote_path=entry["remote_path"],
-                local_path=entry["local_path"],
+                remote_path=remote,
+                local_path=entry.get("local_path", remote),
                 action=entry.get("action", "get"),
             )
             key = (sf.remote_path, sf.local_path)
@@ -274,6 +275,10 @@ def get_files(
 
     messages: List[str] = []
 
+    # Resolve effective project name for prefix application after central fetch.
+    # When project=None we still need the default_project name for the subdir prefix.
+    effective_project = cfg.resolve_effective_project(root, project)
+
     # Resolve central mode if applicable
     conf, resolve_msgs = _resolve_config(
         root, conf, central_url,
@@ -284,8 +289,8 @@ def get_files(
         emit(m)
 
     # Central mode replaces shared_files, so re-apply project prefix
-    if project and conf.mode == "central":
-        conf = cfg._prefix_local_paths(conf, project)
+    if effective_project and conf.mode == "central":
+        conf = cfg._prefix_local_paths(conf, effective_project)
 
     # Expand any glob patterns into concrete file entries
     emit(f"Fetching file list from {conf.source_repo.url}...")
@@ -531,6 +536,9 @@ def push_files(
 
     messages: List[str] = []
 
+    # Resolve effective project name for prefix application after central fetch.
+    effective_project = cfg.resolve_effective_project(root, project)
+
     # Resolve central mode if applicable
     conf, resolve_msgs = _resolve_config(
         root, conf, central_url,
@@ -541,8 +549,8 @@ def push_files(
         emit(m)
 
     # Central mode replaces shared_files, so re-apply project prefix
-    if project and conf.mode == "central":
-        conf = cfg._prefix_local_paths(conf, project)
+    if effective_project and conf.mode == "central":
+        conf = cfg._prefix_local_paths(conf, effective_project)
 
     files_to_push = [f for f in conf.shared_files if f.action == "push"]
 

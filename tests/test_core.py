@@ -1301,6 +1301,84 @@ class TestCentralGetWritesBackSharedFiles:
         assert written[0]["action"] == "push"
         assert written[0]["remote_path"] == "docs/api.md"
 
+    def test_central_get_applies_prefix_via_default_project(self, fake_project):
+        """When project=None, the default_project name is still used to prefix local paths."""
+        root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "agent-coder": {
+                    "source_repo": {"url": "https://example.com/shared.git", "branch": "main"},
+                    "mode": "central",
+                },
+            },
+            "default_project": "agent-coder",
+        }
+        _write_config(shared_dir, config)
+
+        central_data = {
+            "shared_files": [
+                # bare get — no local_path; should default to remote_path and be prefixed
+                {"remote_path": "project-quick-reference.md", "action": "get"},
+            ]
+        }
+
+        stub = StubGitOps(
+            fetch_file_result=json.dumps(central_data).encode(),
+            remote_shas={"project-quick-reference.md": "sha1"},
+            sparse_files={"project-quick-reference.md": b"# Quick Ref"},
+        )
+        get_files(
+            project_root=root, project=None,
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=stub.fetch_single_file,
+        )
+
+        # Must land under the project subdirectory, not the shared root
+        assert (shared_dir / "agent-coder" / "project-quick-reference.md").exists()
+        assert not (shared_dir / "project-quick-reference.md").exists()
+
+    def test_central_get_default_local_path_preserves_subdir(self, fake_project):
+        """remote_path with subdirs like repo_docs/x.md defaults local_path correctly."""
+        root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "agent-coder": {
+                    "source_repo": {"url": "https://example.com/shared.git", "branch": "main"},
+                    "mode": "central",
+                },
+            },
+            "default_project": "agent-coder",
+        }
+        _write_config(shared_dir, config)
+
+        central_data = {
+            "shared_files": [
+                {"remote_path": "repo_docs/tlc-starter-extensions.md", "action": "get"},
+            ]
+        }
+
+        stub = StubGitOps(
+            fetch_file_result=json.dumps(central_data).encode(),
+            remote_shas={"repo_docs/tlc-starter-extensions.md": "sha1"},
+            sparse_files={"repo_docs/tlc-starter-extensions.md": b"# Starter"},
+        )
+        get_files(
+            project_root=root, project=None,
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=stub.fetch_single_file,
+        )
+
+        assert (shared_dir / "agent-coder" / "repo_docs" / "tlc-starter-extensions.md").exists()
+        assert not (shared_dir / "repo_docs" / "tlc-starter-extensions.md").exists()
+
     def test_local_mode_does_not_write_back(self, fake_project):
         root, shared_dir = fake_project
         _write_config(shared_dir, _make_config(
@@ -1347,6 +1425,14 @@ class TestResolveBundles:
         assert len(result) == 1
         assert result[0].remote_path == "docs/a.md"
         assert result[0].bundle is None
+
+    def test_plain_entry_without_local_path_defaults_to_remote_path(self):
+        """Entries without local_path should default local_path to remote_path."""
+        entries = [{"remote_path": "docs/guide.md", "action": "get"}]
+        msgs: list = []
+        result = _resolve_bundles(entries, self._source(), lambda u, b, p: None, msgs)
+        assert len(result) == 1
+        assert result[0].local_path == "docs/guide.md"
 
     def test_bundle_entry_is_expanded(self):
         bundle_content = self._bundle_json([
