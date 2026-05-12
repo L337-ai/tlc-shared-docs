@@ -1736,6 +1736,98 @@ class TestPeerBundleResolution:
         assert (shared_dir / "shared.json").read_text() == original_text
 
 
+class TestGlobDefaultLocalPath:
+    """Glob entries without explicit local_path default to glob_prefix as base dir."""
+
+    def test_glob_without_local_path_uses_prefix_as_base(self, fake_project):
+        """stories/backlog/**/* with no local_path should land files in shared/stories/backlog/."""
+        root, shared_dir = fake_project
+        _write_config(shared_dir, _make_config(
+            shared_files=[{"remote_path": "stories/backlog/**/*", "action": "get"}]
+        ))
+
+        stub = StubGitOps(
+            list_remote_result=["stories/backlog/sprint-1/story-001.md"],
+            remote_shas={"stories/backlog/sprint-1/story-001.md": "sha1"},
+            sparse_files={"stories/backlog/sprint-1/story-001.md": b"# Story 001"},
+        )
+        get_files(
+            project_root=root,
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+            _list_remote=stub.list_remote_files,
+        )
+        expected = shared_dir / "stories" / "backlog" / "sprint-1" / "story-001.md"
+        assert expected.exists()
+        assert expected.read_bytes() == b"# Story 001"
+
+    def test_central_glob_without_local_path_prefixed_by_project(self, fake_project):
+        """Central mode: stories/backlog/**/* lands under agent-coder/stories/backlog/."""
+        root, shared_dir = fake_project
+        config = {
+            "projects": {
+                "agent-coder": {
+                    "source_repo": {"url": "https://example.com/shared.git", "branch": "main"},
+                    "mode": "central",
+                },
+            },
+            "default_project": "agent-coder",
+        }
+        _write_config(shared_dir, config)
+
+        central_data = {
+            "shared_files": [
+                {"remote_path": "stories/backlog/**/*", "action": "get"},
+            ]
+        }
+
+        stub = StubGitOps(
+            fetch_file_result=json.dumps(central_data).encode(),
+            list_remote_result=["stories/backlog/sprint-1/story-001.md"],
+            remote_shas={"stories/backlog/sprint-1/story-001.md": "sha1"},
+            sparse_files={"stories/backlog/sprint-1/story-001.md": b"# Story"},
+        )
+        get_files(
+            project_root=root, project=None,
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+            _detect_identity=_stub_detect_identity,
+            _fetch_file=stub.fetch_single_file,
+            _list_remote=stub.list_remote_files,
+        )
+        expected = shared_dir / "agent-coder" / "stories" / "backlog" / "sprint-1" / "story-001.md"
+        assert expected.exists()
+        assert not (shared_dir / "stories").exists()
+
+    def test_glob_with_empty_prefix_doesnt_produce_absolute_path(self, fake_project):
+        """*.md glob (no directory prefix) should land files in shared_dir root, not /."""
+        root, shared_dir = fake_project
+        _write_config(shared_dir, _make_config(
+            shared_files=[{"remote_path": "*.md", "action": "get"}]
+        ))
+
+        stub = StubGitOps(
+            list_remote_result=["readme.md"],
+            remote_shas={"readme.md": "sha1"},
+            sparse_files={"readme.md": b"# Readme"},
+        )
+        get_files(
+            project_root=root,
+            _get_shas=stub.get_remote_blob_shas,
+            _sparse_checkout=stub.sparse_checkout_files,
+            _read_clone=stub.read_file_from_clone,
+            _cleanup=stub.cleanup,
+            _list_remote=stub.list_remote_files,
+        )
+        # Should land in shared_dir/readme.md, not project_root/readme.md
+        assert (shared_dir / "readme.md").exists()
+        assert not (root / "readme.md").exists()
+
+
 class TestDryRunNewVsOverwrite:
     """dry-run output distinguishes NEW from OVERWRITE based on local file existence."""
 

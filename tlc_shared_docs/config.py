@@ -244,6 +244,19 @@ def bundle_config_path(bundle_name: str) -> str:
     return f"{BUNDLES_DIR}/{bundle_name}.json"
 
 
+def _default_local_path(remote_path: str) -> str:
+    """Return the default local_path when not explicitly set in a config entry.
+
+    Plain paths preserve their full directory structure (local mirrors remote).
+    Glob patterns use the non-wildcard prefix as the base directory so that
+    expanded files land in a sensible folder rather than at the literal
+    glob string.
+    """
+    if is_glob(remote_path):
+        return glob_prefix(remote_path)
+    return remote_path
+
+
 def parse_shared_files(data: dict) -> List[SharedFile]:
     """Parse the shared_files list from a config dict.
 
@@ -260,7 +273,7 @@ def parse_shared_files(data: dict) -> List[SharedFile]:
         shared_files.append(
             SharedFile(
                 remote_path=remote,
-                local_path=entry.get("local_path", remote),
+                local_path=entry.get("local_path", _default_local_path(remote)),
                 action=entry.get("action", "get"),
             )
         )
@@ -284,7 +297,7 @@ def parse_bundle_files(data: dict, bundle_name: str) -> List[SharedFile]:
         files.append(
             SharedFile(
                 remote_path=remote,
-                local_path=entry.get("local_path", remote),
+                local_path=entry.get("local_path", _default_local_path(remote)),
                 action="get",
                 bundle=bundle_name,
             )

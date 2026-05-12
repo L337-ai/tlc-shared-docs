@@ -170,7 +170,7 @@ def _resolve_bundles(
             remote = entry["remote_path"]
             sf = cfg.SharedFile(
                 remote_path=remote,
-                local_path=entry.get("local_path", remote),
+                local_path=entry.get("local_path", cfg._default_local_path(remote)),
                 action=entry.get("action", "get"),
             )
             key = (sf.remote_path, sf.local_path)
@@ -223,7 +223,8 @@ def _expand_get_entries(
                 relative = remote_path[len(prefix):].lstrip("/")
             else:
                 relative = remote_path
-            local_path = sf.local_path.rstrip("/") + "/" + relative
+            base = sf.local_path.rstrip("/")
+            local_path = f"{base}/{relative}" if base else relative
 
             plain.append(cfg.SharedFile(
                 remote_path=remote_path,
