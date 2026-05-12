@@ -603,19 +603,38 @@ before committing to the fetch.
 ## Where shared files live
 
 In multi-project mode, files are auto-isolated into subdirectories
-named after the project-id:
+named after the project-id. The **directory structure from the source
+repo is preserved** within each project subdirectory:
 
 ```
 docs/source/shared/
 ├── shared.json
-├── agent-coder/         <- files from the agent-coder project
-│   ├── architecture.md
+├── agent-coder/                         <- files from the agent-coder project
+│   ├── project-quick-reference.md       <- source had "project-quick-reference.md"
+│   ├── repo_docs/                       <- subdirectory structure preserved
+│   │   ├── tlc-starter-extensions.md
+│   │   └── architecture.md
 │   └── api-spec.md
-└── auth/                <- files from the auth project
+└── auth/                                <- files from the auth project
     └── guide.md
 ```
 
 In single-source mode, files land directly under `docs/source/shared/`.
+
+**Finding a file from a story prompt or arch doc:**
+
+If an architecture prompt references a file by its source-repo path, find
+it at:
+
+```
+docs/source/shared/<project-name>/<path-as-it-appears-in-arch-repo>
+```
+
+Examples:
+- Arch repo has `project-quick-reference.md`, project is `agent-coder`
+  → `docs/source/shared/agent-coder/project-quick-reference.md`
+- Arch repo has `repo_docs/coding-standards.md`, project is `agent-coder`
+  → `docs/source/shared/agent-coder/repo_docs/coding-standards.md`
 
 ### Project-id prefixing
 
@@ -625,6 +644,10 @@ already includes the project name in the path (e.g.,
 `"local_path": "agent-coder/guide.md"`), it will NOT double-prefix.
 Both `"guide.md"` and `"agent-coder/guide.md"` resolve to
 `docs/source/shared/agent-coder/guide.md`.
+
+When `local_path` is omitted from a central config entry, it defaults
+to `remote_path` — so the source-repo directory structure is preserved
+automatically.
 
 **When referencing shared files in this repo, always use the full
 path including the project subdirectory** (e.g.,
@@ -687,16 +710,23 @@ tlc-shared-docs push --dry-run
 5. **Do not manually edit files in `docs/source/shared/<project>/`** that
    were fetched via `get`. They will be overwritten on the next pull.
 
-6. **To contribute new files** (when uploads are enabled by the architecture
+6. **Shared docs mirror the source-repo structure.** When a story prompt
+   or arch doc references a file by its arch-repo path (e.g.,
+   `repo_docs/coding-standards.md`), find it locally at
+   `docs/source/shared/<project-name>/<same-path>`. The project
+   subdirectory is the only addition — everything below it matches the
+   arch repo tree exactly.
+
+7. **To contribute new files** (when uploads are enabled by the architecture
    repo), place them in the appropriate project subdirectory and run
    `tlc-shared-docs push`. The architecture repo's central config controls
    which paths are permitted — files outside those patterns are denied.
 
-7. **Conflict handling**: If `push` reports a CONFLICT, do not use `--force`
+8. **Conflict handling**: If `push` reports a CONFLICT, do not use `--force`
    without understanding what changed on the remote. Run `get` first to pull
    the latest, then resolve and push again.
 
-8. **`shared_files` rules differ by type:**
+9. **`shared_files` rules differ by type:**
    - **Project mode** (`"type": "project"`): do not add `shared_files` to the config.
      The arch repo controls everything via its `.configs/` entry. `shared.json` is
      never modified by `get` — it stays as the clean connection config you wrote.
@@ -704,19 +734,19 @@ tlc-shared-docs push --dry-run
      Edit it freely — add individual files or `{"bundle": "name"}` references.
      It is never overwritten by `get`.
 
-9. **The `shared_files` list shows which docs need to stay current.**
-   After each `get`, read `shared.json` to see which files are in scope.
-   Files with `"action": "get"` are owned by the architecture repo; files
-   with `"action": "push"` are owned by this repo and must be kept up to
-   date as code evolves. When the user makes changes that affect a push
-   file, remind them to run `tlc-shared-docs push` to sync.
+10. **The `shared_files` list shows which docs need to stay current.**
+    After each `get`, read `shared.json` to see which files are in scope.
+    Files with `"action": "get"` are owned by the architecture repo; files
+    with `"action": "push"` are owned by this repo and must be kept up to
+    date as code evolves. When the user makes changes that affect a push
+    file, remind them to run `tlc-shared-docs push` to sync.
 
-10. **You cannot control what files are available.** The architecture repo
+11. **You cannot control what files are available.** The architecture repo
     (player 1) manages the `.configs/` directory that determines what this
     repo gets. If the user wants access to a new file, tell them to update
     the consumer config in the architecture repo.
 
-11. **Use `--clean` to remove stale files.** If the architecture repo
+12. **Use `--clean` to remove stale files.** If the architecture repo
     removes files from the share list, old copies stay on disk. Run
     `tlc-shared-docs get --clean` to delete files that are no longer in
     the current share list. Use `--clean --dry-run` to preview first.
