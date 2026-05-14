@@ -6,11 +6,41 @@ import pytest
 
 from tlc_shared_docs.git_ops import (
     GitError,
+    _inject_pat,
     cleanup,
     list_remote_files,
     read_file_from_clone,
     sparse_checkout_files,
 )
+
+
+class TestInjectPat:
+    """Unit tests for _inject_pat — no network required."""
+
+    def test_injects_pat_into_plain_https_url(self, monkeypatch):
+        monkeypatch.setenv("GH_PAT", "ghp_token123")
+        result = _inject_pat("https://github.com/org/repo.git")
+        assert result == "https://ghp_token123@github.com/org/repo.git"
+
+    def test_noop_when_gh_pat_not_set(self, monkeypatch):
+        monkeypatch.delenv("GH_PAT", raising=False)
+        url = "https://github.com/org/repo.git"
+        assert _inject_pat(url) == url
+
+    def test_noop_for_ssh_url(self, monkeypatch):
+        monkeypatch.setenv("GH_PAT", "ghp_token123")
+        url = "git@github.com:org/repo.git"
+        assert _inject_pat(url) == url
+
+    def test_noop_when_credentials_already_embedded(self, monkeypatch):
+        monkeypatch.setenv("GH_PAT", "ghp_token123")
+        url = "https://existing_user@github.com/org/repo.git"
+        assert _inject_pat(url) == url
+
+    def test_noop_when_user_and_password_embedded(self, monkeypatch):
+        monkeypatch.setenv("GH_PAT", "ghp_token123")
+        url = "https://user:pass@github.com/org/repo.git"
+        assert _inject_pat(url) == url
 
 # Real public repo for integration tests
 REPO_URL = "https://github.com/github/gitignore.git"

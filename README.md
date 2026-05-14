@@ -336,8 +336,37 @@ No special syntax needed — just talk naturally about shared docs and Claude wi
 
 If both player1 and player2 are installed, Claude reads both and asks for clarification when it's ambiguous whether you mean docs managed by this repo or consumed from a remote.
 
+## Headless CI / GH_PAT authentication
+
+In CI containers and other headless environments there is no TTY, so Git cannot prompt for credentials. `tlc-shared-docs` detects this automatically: if the environment variable `GH_PAT` is set, it is embedded directly into any HTTPS remote URL before the first fetch or push:
+
+```
+https://github.com/org/repo.git  →  https://<GH_PAT>@github.com/org/repo.git
+```
+
+**No extra configuration needed.** Just export the variable before running the tool:
+
+```bash
+export GH_PAT="ghp_xxxxxxxxxxxxxxxxxxxx"
+tlc-shared-docs get
+```
+
+Or inline it in a CI step (GitHub Actions example):
+
+```yaml
+- name: Pull shared docs
+  run: tlc-shared-docs get
+  env:
+    GH_PAT: ${{ secrets.GH_PAT }}
+```
+
+The injection is a no-op when:
+- `GH_PAT` is not set (standard interactive sessions are unaffected)
+- The URL is an SSH remote (`git@github.com:...`)
+- Credentials are already embedded in the URL
+
 ## Requirements
 
 - Python 3.9+
 - Git installed and on `PATH`
-- Valid Git credentials for the source repo
+- Valid Git credentials for the source repo (or `GH_PAT` env var in CI)

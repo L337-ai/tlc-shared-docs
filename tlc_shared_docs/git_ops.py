@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -12,6 +13,20 @@ from git import Repo, GitCommandError
 
 class GitError(RuntimeError):
     """Raised when a git operation fails."""
+
+
+def _inject_pat(url: str) -> str:
+    """Embed GH_PAT into an HTTPS URL for headless CI authentication.
+
+    No-ops when GH_PAT is unset, the URL is SSH, or credentials are already present.
+    """
+    pat = os.environ.get("GH_PAT")
+    if not pat or not url.startswith("https://"):
+        return url
+    host_part = url[len("https://"):].split("/")[0]
+    if "@" in host_part:
+        return url  # already has credentials
+    return url.replace("https://", f"https://{pat}@", 1)
 
 
 def _tmp_clone_dir() -> Path:
@@ -29,6 +44,7 @@ def list_remote_files(
     Uses a treeless clone (``--filter=tree:0``) so only the tree metadata
     is fetched -- no file blobs are downloaded.
     """
+    url = _inject_pat(url)
     clone_dir = _tmp_clone_dir()
     repo = None
     try:
@@ -65,6 +81,7 @@ def get_remote_blob_shas(
     Uses a treeless fetch so no file content is downloaded -- only
     tree metadata needed to read the blob SHA per path.
     """
+    url = _inject_pat(url)
     clone_dir = _tmp_clone_dir()
     repo = None
     try:
@@ -104,6 +121,7 @@ def sparse_checkout_files(
 
     Depth=1 avoids fetching full history -- we only need latest content.
     """
+    url = _inject_pat(url)
     clone_dir = _tmp_clone_dir()
     repo = None
     try:
@@ -161,6 +179,7 @@ def push_files(
         if verbose and _print:
             _print(msg)
 
+    url = _inject_pat(url)
     clone_dir = _tmp_clone_dir()
     repo = None
     try:
