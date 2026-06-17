@@ -144,6 +144,7 @@ Each file defines what that consumer can get and push:
 | `shared_files[].action` | `get` = consumer pulls from here. `push` = consumer pushes back here |
 | `uploads.allowed` | Whether the consumer can upload new files |
 | `uploads.paths` | Glob patterns restricting where new uploads may land |
+| `access` | **Peer configs only.** A glob **string** (e.g. `"*"`, `"repo_docs/**"`) scoping which files in this repo the peer may request. Must be a string — not an array. The peer's own `shared.json` lists the individual files; this field only controls what namespace they're allowed to reach into. |
 
 ### Peer consumers
 
@@ -171,6 +172,28 @@ specific folder, use a glob:
 }
 ```
 
+> **`access` is a glob string, not a file list.**
+>
+> `access` defines the namespace the peer is permitted to request from — it is not a
+> list of specific files. Use a single glob string (`"*"`, `"repo_docs/**"`, etc.).
+> The peer lists the specific files it needs in **its own `shared.json`**, not here.
+>
+> If you want a peer to access only two specific files, set `access` to the folder
+> glob that covers them and let the peer enumerate the files in their own config.
+>
+> **Wrong:**
+> ```json
+> { "type": "peer", "access": ["repo_docs/guide.md", "repo_docs/api.md"] }
+> ```
+> **Right — Player 1 side (this file):**
+> ```json
+> { "type": "peer", "access": "repo_docs/**" }
+> ```
+> **Right — Player 2 side (peer's `shared.json`):**
+> ```json
+> { "remote_path": "repo_docs/guide.md", "local_path": "guide.md", "action": "get" }
+> ```
+
 **How peer access differs from project access:**
 
 | | Project consumer | Peer consumer |
@@ -182,6 +205,19 @@ specific folder, use a glob:
 
 `project` consumers are end-product repos; `peer` consumers are sibling
 architecture repos consuming shared standards or patterns internally.
+
+> **Common mistake: using `access` as a file list**
+>
+> Users coming from the `project` pattern sometimes write:
+> ```json
+> {
+>   "type": "peer",
+>   "access": ["repo_docs/guide.md", "repo_docs/api.md"]
+> }
+> ```
+> This is invalid. In `project` configs, YOU control the file list via `shared_files`.
+> In `peer` configs, the peer controls their own file list — your only job is to set
+> the access scope with a glob string. The array form of `access` is not supported.
 
 ### local_path and project-id prefixing
 
@@ -323,6 +359,11 @@ Use a glob pattern to scope the grant:
 ```
 The peer may only request files matching `repo_docs/**`. Requests outside
 that scope are denied and reported at get-time. Commit and push.
+
+**Note:** These configs grant access only — they contain no file list. The peer repo
+writes its own file list in its `shared.json` (Player 2 side). If the peer needs only
+specific files within a folder, scope `access` to that folder's glob and let the peer
+enumerate the files themselves.
 
 ### Check who receives a specific file
 
@@ -548,6 +589,20 @@ and you own it completely.
   }
 }
 ```
+
+**What the arch repo's side (Player 1) should look like:**
+
+```json
+{
+  "type": "peer",
+  "access": "docs/**"
+}
+```
+
+The arch repo's `.configs/<your-org>/<your-repo>.json` has **no `shared_files`** —
+only `type: peer` and an `access` glob. If that file contains an array of paths
+in `access`, that is a misconfiguration; the file list belongs here in your
+`shared.json`, not there.
 
 In peer mode:
 - `shared_files` is **safe to edit manually** — it is never overwritten by `get`
