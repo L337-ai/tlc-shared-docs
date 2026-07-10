@@ -9,7 +9,6 @@ import pytest
 
 from tlc_shared_docs.config import (
     GITIGNORE_CONTENT,
-    SharedFile,
     SourceRepo,
     UploadConfig,
     central_config_path,
@@ -437,7 +436,10 @@ class TestListProjects:
         root, shared_dir = fake_project
         config = {
             "projects": {
-                "events": {"source_repo": {"url": "https://example.com/events.git", "branch": "dev"}, "mode": "central"},
+                "events": {
+                    "source_repo": {"url": "https://example.com/events.git", "branch": "dev"},
+                    "mode": "central",
+                },
                 "auth": {"source_repo": {"url": "https://example.com/auth.git"}, "mode": "central"},
                 "agent": {"source_repo": {"url": "https://example.com/agent.git"}},
             },

@@ -87,6 +87,7 @@ tests/
 - **Relative `local_path`** resolves under `docs/source/shared/`
 - **Absolute `local_path`** (starts with `/`) resolves from project root
 - **Glob patterns** supported for `get` only — not for `push`
+- **Gitignore guard:** `push` refuses files gitignored in the current repo (except by the auto-generated shared-dir `.gitignore`); not bypassed by `--force`
 - **Auto-gitignore:** fetched files are not committed; only `shared.json` is tracked
 - **Project root detection:** walks up from cwd looking for `.git`, `pyproject.toml`, or `setup.py`
 - **Sparse checkout:** only the requested files are fetched (`depth=1`)

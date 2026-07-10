@@ -89,7 +89,7 @@ Each config file in `.configs/org/repo.json` tells that consumer what to get and
     },
     {
       "remote_path": "docs/api-spec.md",
-      "local_path": "api-spec.md",
+      "local_path": "/docs/api-spec.md",
       "action": "push"
     }
   ],
@@ -251,16 +251,25 @@ Give a consumer only `get` actions — they can pull docs but not push anything:
 
 ### Read-write consumers
 
-Add `push` actions for files the consumer owns or co-maintains:
+Add `push` actions for files the consumer owns:
 
 ```json
 {
   "shared_files": [
     { "remote_path": "docs/guide.md", "local_path": "guide.md", "action": "get" },
-    { "remote_path": "docs/api-spec.md", "local_path": "api-spec.md", "action": "push" }
+    { "remote_path": "docs/api-spec.md", "local_path": "/docs/api-spec.md", "action": "push" }
   ]
 }
 ```
+
+Push entries follow two rules:
+
+- **`local_path` must start with `/`** (the consumer's repo root). The
+  consumer maintains the document as a tracked file in its own tree —
+  a relative path would point into their `docs/source/shared/` directory,
+  which holds only fetched, gitignored copies.
+- **One owner per document** — the same `remote_path` must never appear
+  with both `get` and `push`, or the copies overwrite each other in turns.
 
 ### Allowing new file uploads
 

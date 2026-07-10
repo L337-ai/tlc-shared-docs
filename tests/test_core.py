@@ -206,7 +206,7 @@ class TestGetGlobExpandsToConcreteFiles:
             remote_shas={"stories/a/b.md": "sha1"},
             sparse_files={"stories/a/b.md": b"hello"},
         )
-        messages = get_files(
+        get_files(
             project_root=root,
             _get_shas=stub.get_remote_blob_shas,
             _sparse_checkout=stub.sparse_checkout_files,
@@ -404,7 +404,6 @@ class TestCleanRemovesStaleFiles:
         (shared_dir / ".gitignore").write_text("*")
         (shared_dir / ".shared-hashes.json").write_text("{}")
 
-        stub = StubGitOps()
         get_files(project_root=root, clean=True)
 
         assert (shared_dir / ".gitignore").exists()
@@ -445,7 +444,7 @@ class TestCleanRemovesStaleFiles:
             remote_shas={"doc.md": "sha1"},
             sparse_files={"doc.md": b"kept"},
         )
-        messages = get_files(
+        get_files(
             project_root=root, project="alpha", clean=True,
             _get_shas=stub.get_remote_blob_shas,
             _sparse_checkout=stub.sparse_checkout_files,
@@ -531,6 +530,102 @@ class TestPushBehavior:
         # Default sample config only has action=get files
         messages = push_files(project_root=root)
         assert "No files with action=push" in messages[0]
+
+
+class TestPushGitignoreGuard:
+    """Push must refuse files that are gitignored in the current repo —
+    tlc-shared-docs can't be used to hoist ignored files to the shared repo."""
+
+    def _write_push_config(self, shared_dir):
+        _write_config(shared_dir, _make_config(shared_files=[
+            {"remote_path": "docs/secret.md", "local_path": "/build/secret.md", "action": "push"},
+            {"remote_path": "docs/guide.md", "local_path": "guide.md", "action": "push"},
+        ]))
+
+    def _make_local_files(self, root, shared_dir):
+        (root / "build").mkdir()
+        (root / "build" / "secret.md").write_text("s", encoding="utf-8")
+        (shared_dir / "guide.md").write_text("g", encoding="utf-8")
+
+    def test_gitignored_file_is_blocked_others_push(self, fake_project):
+        root, shared_dir = fake_project
+        self._write_push_config(shared_dir)
+        self._make_local_files(root, shared_dir)
+
+        checked_paths: List[str] = []
+
+        def stub_check(r, paths):
+            checked_paths.extend(paths)
+            return {"build/secret.md": ".gitignore"}
+
+        stub = StubGitOps()
+        messages = push_files(
+            project_root=root,
+            _get_shas=stub.get_remote_blob_shas,
+            _push=stub.push_files,
+            _check_ignored=stub_check,
+        )
+        # Both candidates were checked, relative to project root
+        assert "build/secret.md" in checked_paths
+        assert "docs/source/shared/guide.md" in checked_paths
+        # Blocked file reported and excluded; the clean file still pushed
+        assert any("BLOCKED (gitignored)" in m and "build/secret.md" in m for m in messages)
+        assert stub.push_called
+        assert "docs/secret.md" not in stub.push_kwargs["file_map"]
+        assert "docs/guide.md" in stub.push_kwargs["file_map"]
+
+    def test_shared_dir_auto_gitignore_is_exempt(self, fake_project):
+        root, shared_dir = fake_project
+        self._write_push_config(shared_dir)
+        self._make_local_files(root, shared_dir)
+
+        # The tool's own .gitignore ignores everything under the shared dir;
+        # it must not block pushes of files living there.
+        def stub_check(r, paths):
+            return {"docs/source/shared/guide.md": "docs/source/shared/.gitignore"}
+
+        stub = StubGitOps()
+        messages = push_files(
+            project_root=root,
+            _get_shas=stub.get_remote_blob_shas,
+            _push=stub.push_files,
+            _check_ignored=stub_check,
+        )
+        assert not any("BLOCKED" in m for m in messages)
+        assert "docs/guide.md" in stub.push_kwargs["file_map"]
+
+    def test_all_files_blocked_aborts_push(self, fake_project):
+        root, shared_dir = fake_project
+        _write_config(shared_dir, _make_config(shared_files=[
+            {"remote_path": "docs/secret.md", "local_path": "/build/secret.md", "action": "push"},
+        ]))
+        (root / "build").mkdir()
+        (root / "build" / "secret.md").write_text("s", encoding="utf-8")
+
+        stub = StubGitOps()
+        messages = push_files(
+            project_root=root,
+            _get_shas=stub.get_remote_blob_shas,
+            _push=stub.push_files,
+            _check_ignored=lambda r, paths: {"build/secret.md": ".gitignore"},
+        )
+        assert not stub.push_called
+        assert any("Push aborted" in m for m in messages)
+
+    def test_dry_run_shows_blocked_not_planned(self, fake_project):
+        root, shared_dir = fake_project
+        self._write_push_config(shared_dir)
+        self._make_local_files(root, shared_dir)
+
+        messages = push_files(
+            project_root=root,
+            dry_run=True,
+            _check_ignored=lambda r, paths: {"build/secret.md": ".gitignore"},
+        )
+        assert any("BLOCKED (gitignored)" in m for m in messages)
+        planned = [m for m in messages if "[dry-run] Would push" in m]
+        assert not any("secret" in m for m in planned)
+        assert any("guide.md" in m for m in planned)
 
 
 # ===========================================================================
@@ -650,7 +745,8 @@ class TestCLI:
         config = {
             "projects": {
                 "alpha": {"source_repo": {"url": "https://example.com/alpha.git"}, "shared_files": [], "type": "peer"},
-                "beta":  {"source_repo": {"url": "https://example.com/beta.git"},  "shared_files": []},  # project (default)
+                # beta is a project (the default type)
+                "beta":  {"source_repo": {"url": "https://example.com/beta.git"},  "shared_files": []},
                 "gamma": {"source_repo": {"url": "https://example.com/gamma.git"}, "shared_files": [], "type": "peer"},
             },
         }
@@ -1137,7 +1233,7 @@ class TestMultiProjectGetAndPush:
         (shared_dir / "alpha" / "a.md").write_text("# Alpha doc")
 
         stub = StubGitOps()
-        messages = push_files(
+        push_files(
             project_root=root, force=True, project="alpha",
             _sparse_checkout=stub.sparse_checkout_files,
             _cleanup=stub.cleanup,
@@ -1400,7 +1496,6 @@ class TestCentralGetWritesBackSharedFiles:
 
         # local mode should not modify shared.json
         assert (shared_dir / "shared.json").read_text() == original_text
-
 
 
 # ===========================================================================

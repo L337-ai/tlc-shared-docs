@@ -299,7 +299,6 @@ def get_files(
     for m in expand_msgs:
         emit(m)
 
-
     # If --bundle is specified, scope to just that bundle's files
     if bundle:
         all_count = len(files_to_get)
@@ -507,6 +506,70 @@ def _discover_uploadable_files(
     return candidates, messages
 
 
+# The tool's auto-generated .gitignore (relative to project root). It ignores
+# everything under the shared dir by design, so it is exempt from the push
+# gitignore guard — otherwise no file could ever be pushed from the shared dir.
+_SHARED_GITIGNORE = (cfg.SHARED_DIR / ".gitignore").as_posix()
+
+
+def _filter_gitignored_pushes(
+    root: Path,
+    files_to_push: List[cfg.SharedFile],
+    upload_candidates: List[tuple[Path, str]],
+    check_ignored: Callable[..., dict[str, str]],
+) -> tuple[List[cfg.SharedFile], List[tuple[Path, str]], List[str]]:
+    """Drop push/upload entries whose local file is gitignored in this repo.
+
+    tlc-shared-docs must not be a channel for hoisting gitignored files
+    (secrets, build artifacts, local scratch) out of the consuming repo into
+    the shared repo. Only the shared dir's auto-generated .gitignore is
+    exempt — any other ignore rule blocks the file.
+
+    Returns ``(allowed_pushes, allowed_uploads, messages)``.
+    """
+    messages: List[str] = []
+
+    def rel_of(local: Path) -> Optional[str]:
+        # Paths outside the project root can't be checked against its ignores
+        try:
+            return local.relative_to(root).as_posix()
+        except ValueError:
+            return None
+
+    push_rels = [
+        (sf, rel_of(cfg.resolve_local_path(root, sf.local_path)))
+        for sf in files_to_push
+    ]
+    upload_rels = [(cand, rel_of(cand[0])) for cand in upload_candidates]
+
+    all_rels = [r for _, r in push_rels + upload_rels if r is not None]
+    ignored = check_ignored(root, all_rels)
+    # Exempt the auto-generated shared-dir .gitignore (ignores * by design)
+    ignored = {p: src for p, src in ignored.items() if src != _SHARED_GITIGNORE}
+
+    allowed_pushes: List[cfg.SharedFile] = []
+    for sf, rel in push_rels:
+        if rel in ignored:
+            messages.append(
+                f"BLOCKED (gitignored): {rel} is ignored by {ignored[rel]} "
+                f"in this repo — refusing to push."
+            )
+        else:
+            allowed_pushes.append(sf)
+
+    allowed_uploads: List[tuple[Path, str]] = []
+    for cand, rel in upload_rels:
+        if rel in ignored:
+            messages.append(
+                f"BLOCKED (gitignored): {rel} is ignored by {ignored[rel]} "
+                f"in this repo — refusing to upload."
+            )
+        else:
+            allowed_uploads.append(cand)
+
+    return allowed_pushes, allowed_uploads, messages
+
+
 def push_files(
     project_root: Optional[Path] = None,
     dry_run: bool = False,
@@ -516,10 +579,11 @@ def push_files(
     verbose: bool = False,
     _sparse_checkout: Callable[..., tuple] = git_ops.sparse_checkout_files,
     _cleanup: Callable[..., None] = git_ops.cleanup,
-    _push: Callable[..., None] = git_ops.push_files,
+    _push: Callable[..., List[str]] = git_ops.push_files,
     _detect_identity: Callable[[Path], str] = cfg.detect_repo_identity,
     _fetch_file: Callable[..., bytes | None] = git_ops.fetch_single_file,
     _get_shas: Callable[..., dict[str, str]] = git_ops.get_remote_blob_shas,
+    _check_ignored: Callable[..., dict[str, str]] = git_ops.check_ignored,
     _print: Callable[[str], None] = _noop_print,
 ) -> List[str]:
     """Push local shared files to the remote repo.
@@ -568,8 +632,22 @@ def push_files(
     for m in upload_msgs:
         emit(m)
 
+    # Guard: never push a file that is gitignored in the current repo — that
+    # would hoist ignored content (secrets, artifacts) into the shared repo.
+    # Keep the unfiltered list for the shared.json write-back below: a blocked
+    # file is still this repo's push responsibility.
+    configured_pushes = files_to_push
+    files_to_push, upload_candidates, guard_msgs = _filter_gitignored_pushes(
+        root, files_to_push, upload_candidates, _check_ignored
+    )
+    for m in guard_msgs:
+        emit(m)
+
     if not files_to_push and not upload_candidates:
-        emit("No files with action=push found in shared.json")
+        if guard_msgs:
+            emit("Push aborted: all candidate files are gitignored in this repo.")
+        else:
+            emit("No files with action=push found in shared.json")
         return messages
 
     if dry_run:
@@ -671,8 +749,9 @@ def push_files(
 
     # Keep shared.json in sync with push responsibilities. Same rule as get:
     # only push entries are stored; any stale get entries are removed.
+    # Uses the pre-guard list so gitignore-blocked entries stay on record.
     if conf.mode == "central" and conf.type != "peer" and not dry_run:
-        cfg.update_project_shared_files(root, project, files_to_push)
+        cfg.update_project_shared_files(root, project, configured_pushes)
 
     return messages
 

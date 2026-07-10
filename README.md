@@ -28,12 +28,18 @@ Create `docs/source/shared/shared.json` in your project:
     },
     {
       "remote_path": "guides/api-reference.md",
-      "local_path": "api-reference.md",
+      "local_path": "/docs/api-reference.md",
       "action": "push"
     }
   ]
 }
 ```
+
+Note the leading `/` on the push entry's `local_path` — it means "from the
+project root". A pushed document is one this repo owns, tracked in its own
+tree; without the `/` the path would resolve under `docs/source/shared/`,
+which holds only fetched copies. A document should never have both a `get`
+and a `push` entry — one owner per document.
 
 ### 2. Pull shared files
 
@@ -54,6 +60,8 @@ This pushes every file with `"action": "push"` to the remote repo. If a remote f
 ```bash
 tlc-shared-docs push --force
 ```
+
+Files that are **gitignored in the current repo** are refused (`BLOCKED (gitignored)`) — the tool cannot be used to hoist ignored content (secrets, build artifacts) into the shared repo. The only exception is the auto-generated `docs/source/shared/.gitignore`, which ignores everything by design. This guard is not bypassed by `--force`; to push such a file, un-ignore it in your repo first.
 
 ### 4. Preview changes
 
@@ -90,8 +98,8 @@ With `--clean`, only files inside the project subdirectory (or shared root for l
 | `source_repo.url` | Git clone URL for the shared repo |
 | `source_repo.branch` | Branch to pull from / push to (default: `main`) |
 | `shared_files[].remote_path` | Path to the file in the remote repo (supports glob patterns for `get`) |
-| `shared_files[].local_path` | Local destination path (relative to `docs/source/shared/`) |
-| `shared_files[].action` | `get` (pull from remote) or `push` (push to remote). Default: `get` |
+| `shared_files[].local_path` | Local path. No leading `/` = relative to `docs/source/shared/` (fetched copies). Leading `/` = from the project root — required for `push` entries, which point at tracked files this repo owns |
+| `shared_files[].action` | `get` (pull from remote) or `push` (push to remote). Default: `get`. Never give the same document both actions — one owner per document |
 
 ### Wildcard / glob patterns
 

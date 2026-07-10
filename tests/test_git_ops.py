@@ -7,6 +7,7 @@ import pytest
 from tlc_shared_docs.git_ops import (
     GitError,
     _inject_pat,
+    check_ignored,
     cleanup,
     list_remote_files,
     read_file_from_clone,
@@ -41,6 +42,59 @@ class TestInjectPat:
         monkeypatch.setenv("GH_PAT", "ghp_token123")
         url = "https://user:pass@github.com/org/repo.git"
         assert _inject_pat(url) == url
+
+
+class TestCheckIgnored:
+    """Unit tests for check_ignored — local git repo, no network."""
+
+    def _init_repo(self, tmp_path):
+        from git import Repo
+        repo = Repo.init(tmp_path)
+        repo.close()
+        return tmp_path
+
+    def test_ignored_file_reported_with_source(self, tmp_path):
+        root = self._init_repo(tmp_path)
+        (root / ".gitignore").write_text("secret*\n", encoding="utf-8")
+        (root / "secret.md").write_text("s", encoding="utf-8")
+        (root / "plain.md").write_text("p", encoding="utf-8")
+
+        result = check_ignored(root, ["secret.md", "plain.md"])
+        assert result == {"secret.md": ".gitignore"}
+
+    def test_negation_pattern_not_reported_ignored(self, tmp_path):
+        root = self._init_repo(tmp_path)
+        (root / ".gitignore").write_text("secret*\n!secret-keep.md\n", encoding="utf-8")
+        (root / "secret-keep.md").write_text("k", encoding="utf-8")
+
+        result = check_ignored(root, ["secret-keep.md"])
+        assert "secret-keep.md" not in result
+
+    def test_nested_gitignore_source_is_relative(self, tmp_path):
+        root = self._init_repo(tmp_path)
+        sub = root / "docs"
+        sub.mkdir()
+        (sub / ".gitignore").write_text("*.log\n", encoding="utf-8")
+        (sub / "debug.log").write_text("x", encoding="utf-8")
+
+        result = check_ignored(root, ["docs/debug.log"])
+        assert result == {"docs/debug.log": "docs/.gitignore"}
+
+    def test_no_ignored_paths_returns_empty(self, tmp_path):
+        root = self._init_repo(tmp_path)
+        (root / "plain.md").write_text("p", encoding="utf-8")
+        assert check_ignored(root, ["plain.md"]) == {}
+
+    def test_not_a_git_repo_returns_empty(self, tmp_path):
+        # Bare .git marker directory (like the fake_project fixture)
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "file.md").write_text("x", encoding="utf-8")
+        assert check_ignored(tmp_path, ["file.md"]) == {}
+
+    def test_empty_path_list_returns_empty(self, tmp_path):
+        root = self._init_repo(tmp_path)
+        assert check_ignored(root, []) == {}
+
 
 # Real public repo for integration tests
 REPO_URL = "https://github.com/github/gitignore.git"

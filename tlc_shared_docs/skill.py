@@ -121,7 +121,7 @@ Each file defines what that consumer can get and push:
     },
     {
       "remote_path": "docs/api-spec.md",
-      "local_path": "api-spec.md",
+      "local_path": "/docs/api-spec.md",
       "action": "push"
     }
   ],
@@ -140,11 +140,48 @@ Each file defines what that consumer can get and push:
 |---|---|
 | `type` | `"project"` (default) or `"peer"` — marks this consumer as a fellow architecture repo rather than a standard project repo |
 | `shared_files[].remote_path` | Path to the file IN THIS REPO |
-| `shared_files[].local_path` | Where the file lands on the consumer side (relative to their shared dir) |
-| `shared_files[].action` | `get` = consumer pulls from here. `push` = consumer pushes back here |
+| `shared_files[].local_path` | Where the file lives on the consumer side. No leading `/` = under their `docs/source/shared/` dir (fetched copies). Leading `/` = from their repo root (their own tracked tree). **`push` entries must use a leading `/`.** |
+| `shared_files[].action` | `get` = consumer pulls from here. `push` = consumer pushes back here. **Never both for the same document** — see push rules below |
 | `uploads.allowed` | Whether the consumer can upload new files |
 | `uploads.paths` | Glob patterns restricting where new uploads may land |
 | `access` | **Peer configs only.** A glob **string** (e.g. `"*"`, `"repo_docs/**"`) scoping which files in this repo the peer may request. Must be a string — not an array. The peer's own `shared.json` lists the individual files; this field only controls what namespace they're allowed to reach into. |
+
+### Push entries — one owner, repo-root paths
+
+A `push` entry means the CONSUMER owns the document and sends it here.
+Two rules that agents commonly get wrong:
+
+1. **`local_path` MUST start with `/` (the consumer's repo root).**
+   A leading `/` means "from the consumer's repo root" — the document is a
+   normal tracked file in their tree, e.g. `"/docs/api-spec.md"`. Without
+   the `/`, the path resolves under their `docs/source/shared/` directory,
+   which holds only fetched, gitignored copies. A document the consumer
+   owns never lives there, so a relative `local_path` on a push entry
+   points at nothing (or worse, at a stale fetched copy).
+
+2. **A document is either `get` OR `push` — never both.** Every document
+   has exactly one owner: `get` = this repo owns it and the consumer reads
+   it; `push` = the consumer owns it and this repo receives it. Listing the
+   same `remote_path` with both actions makes the file ping-pong — `get`
+   overwrites the consumer's copy, `push` overwrites this repo's copy, and
+   whichever ran last silently wins.
+
+> **Wrong** — relative path points into their fetched-copies dir, and the
+> document appears with both actions:
+> ```json
+> { "remote_path": "docs/api-spec.md", "local_path": "api-spec.md", "action": "push" }
+> { "remote_path": "docs/api-spec.md", "local_path": "api-spec.md", "action": "get" }
+> ```
+> **Right** — one entry, one owner, leading `/`:
+> ```json
+> { "remote_path": "docs/api-spec.md", "local_path": "/docs/api-spec.md", "action": "push" }
+> ```
+> The consumer maintains `docs/api-spec.md` in its own tree and
+> `tlc-shared-docs push` sends it to `docs/api-spec.md` in this repo.
+
+Also note: the consumer's `push` refuses files that are gitignored in the
+consumer repo (`BLOCKED (gitignored)`) — the tool cannot hoist ignored
+content into this repo, and `--force` does not bypass that.
 
 ### Peer consumers
 
@@ -305,12 +342,15 @@ Edit `.configs/<org>/<repo>.json` and add an entry:
 { "remote_path": "docs/new-guide.md", "local_path": "new-guide.md", "action": "get" }
 ```
 
-### Let a consumer push changes to a file
+### Let a consumer own and push a document
 
-Set `action` to `push`:
+Set `action` to `push` and point `local_path` at the document's home in the
+consumer's own tree — leading `/` = their repo root:
 ```json
-{ "remote_path": "docs/api-spec.md", "local_path": "api-spec.md", "action": "push" }
+{ "remote_path": "docs/api-spec.md", "local_path": "/docs/api-spec.md", "action": "push" }
 ```
+Remove any `get` entry for the same `remote_path` first — a document is
+either `get` or `push`, never both (see push rules above).
 
 ### Allow a consumer to upload new files
 
@@ -708,6 +748,22 @@ automatically.
 path including the project subdirectory** (e.g.,
 `docs/source/shared/agent-coder/guide.md`).
 
+### The leading `/` in `local_path`
+
+`local_path` resolution has two modes, and the difference matters:
+
+| `local_path` | Resolves to | Used for |
+|---|---|---|
+| `"guide.md"` (no leading `/`) | `docs/source/shared/<project>/guide.md` | `get` — fetched, gitignored copies |
+| `"/docs/api-spec.md"` (leading `/`) | `<repo-root>/docs/api-spec.md` | `push` — documents THIS repo owns, tracked in its own tree |
+
+A document this repo owns and pushes to central is a normal tracked file
+somewhere in the repo tree (e.g. `docs/api-spec.md`) — so its config entry
+needs the leading `/`. Agents that omit it end up pointing the push at
+`docs/source/shared/...`, where only fetched copies live, and the push
+finds nothing (or sends a stale copy). Absolute paths are never
+project-prefixed.
+
 ---
 
 ## CLI commands
@@ -772,36 +828,50 @@ tlc-shared-docs push --dry-run
    subdirectory is the only addition — everything below it matches the
    arch repo tree exactly.
 
-7. **To contribute new files** (when uploads are enabled by the architecture
-   repo), place them in the appropriate project subdirectory and run
-   `tlc-shared-docs push`. The architecture repo's central config controls
-   which paths are permitted — files outside those patterns are denied.
+7. **Push documents live in THIS repo's tree — never in `docs/source/shared/`.**
+   A `push` entry means this repo owns the document: it is a normal tracked
+   file in the repo tree (e.g. `docs/api-spec.md`), and its `local_path`
+   MUST start with `/` (repo root), e.g. `"/docs/api-spec.md"`. The shared
+   dir holds only fetched, gitignored copies — pushing from there makes no
+   sense. And a document is either `get` OR `push`, never both: one owner
+   per document. If the same document appears with both actions, that is a
+   misconfiguration — flag it to the user instead of running `push`.
 
-8. **Conflict handling**: If `push` reports a CONFLICT, do not use `--force`
+8. **To contribute brand-new files via uploads** (a separate flow from
+   configured push entries, available only when the architecture repo has
+   enabled `uploads`), place them in the appropriate project subdirectory
+   under `docs/source/shared/` and run `tlc-shared-docs push`. The
+   architecture repo's central config controls which paths are permitted —
+   files outside those patterns are denied.
+
+9. **Conflict handling**: If `push` reports a CONFLICT, do not use `--force`
    without understanding what changed on the remote. Run `get` first to pull
-   the latest, then resolve and push again.
+   the latest, then resolve and push again. If `push` reports
+   `BLOCKED (gitignored)`, the file is gitignored in this repo and will never
+   be pushed — `--force` does not bypass this. Un-ignore the file first if it
+   genuinely belongs in the shared repo.
 
-9. **`shared_files` rules differ by type:**
-   - **Project mode** (`"type": "project"`): do not add `shared_files` to the config.
-     The arch repo controls everything via its `.configs/` entry. `shared.json` is
-     never modified by `get` — it stays as the clean connection config you wrote.
-   - **Peer mode** (`"type": "peer"`): `shared_files` is YOUR request list.
-     Edit it freely — add individual files or `{"bundle": "name"}` references.
-     It is never overwritten by `get`.
+10. **`shared_files` rules differ by type:**
+    - **Project mode** (`"type": "project"`): do not add `shared_files` to the config.
+      The arch repo controls everything via its `.configs/` entry. `shared.json` is
+      never modified by `get` — it stays as the clean connection config you wrote.
+    - **Peer mode** (`"type": "peer"`): `shared_files` is YOUR request list.
+      Edit it freely — add individual files or `{"bundle": "name"}` references.
+      It is never overwritten by `get`.
 
-10. **The `shared_files` list shows which docs need to stay current.**
+11. **The `shared_files` list shows which docs need to stay current.**
     After each `get`, read `shared.json` to see which files are in scope.
     Files with `"action": "get"` are owned by the architecture repo; files
     with `"action": "push"` are owned by this repo and must be kept up to
     date as code evolves. When the user makes changes that affect a push
     file, remind them to run `tlc-shared-docs push` to sync.
 
-11. **You cannot control what files are available.** The architecture repo
+12. **You cannot control what files are available.** The architecture repo
     (player 1) manages the `.configs/` directory that determines what this
     repo gets. If the user wants access to a new file, tell them to update
     the consumer config in the architecture repo.
 
-12. **Use `--clean` to remove stale files.** If the architecture repo
+13. **Use `--clean` to remove stale files.** If the architecture repo
     removes files from the share list, old copies stay on disk. Run
     `tlc-shared-docs get --clean` to delete files that are no longer in
     the current share list. Use `--clean --dry-run` to preview first.
@@ -833,7 +903,38 @@ tlc-shared-docs list
 tlc-shared-docs get --dry-run -p <project-name>
 ```
 
-### Upload a new file to the architecture repo
+### Share a document from this repo to the architecture repo (push)
+
+Example: this repo owns `docs/api-spec.md` and the arch repo should receive
+it as `specs/api-spec.md`.
+
+1. **The document stays where it is** — a normal tracked file in this
+   repo's tree. Do NOT copy or move it into `docs/source/shared/`; that
+   directory holds only fetched, gitignored copies.
+2. **The config entry needs a leading `/` on `local_path`** (= this repo's
+   root). In project mode the arch repo maintainer adds it to
+   `.configs/<org>/<this-repo>.json`; in peer mode add it to your own
+   `shared.json` under the project's `shared_files`:
+   ```json
+   { "remote_path": "specs/api-spec.md", "local_path": "/docs/api-spec.md", "action": "push" }
+   ```
+   Without the leading `/`, the tool looks for the document under
+   `docs/source/shared/` and the push finds nothing.
+3. **Check no `get` entry exists for the same document.** One owner per
+   document: `get` = arch repo owns it, `push` = this repo owns it. Never
+   both — the copies would overwrite each other in turns.
+4. Verify the file is not gitignored in this repo (a gitignored file is
+   `BLOCKED` at push time), then preview and push:
+   ```bash
+   tlc-shared-docs push --dry-run
+   tlc-shared-docs push
+   ```
+
+### Upload a new file to the architecture repo (uploads flow)
+
+Use this only for contributing brand-new files when the arch repo has
+enabled `uploads` — for documents this repo owns long-term, use a `push`
+entry instead (see above).
 
 1. Place the file under `docs/source/shared/<project>/` in a path that
    matches the upload patterns configured by the architecture repo.

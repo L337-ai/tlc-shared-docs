@@ -1,0 +1,5 @@
+[flake8]
+max-line-length = 120
+per-file-ignores =
+    # skill.py is embedded markdown content — table rows and JSON examples run long
+    tlc_shared_docs/skill.py: E501

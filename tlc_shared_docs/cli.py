@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from tlc_shared_docs import __version__
@@ -159,7 +160,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve_project_list(project_arg: str | None, root: Path) -> list[str | None]:
+def _resolve_project_list(project_arg: str | None, root: Path) -> Sequence[str | None]:
     """Expand a -p argument into a list of project names to process.
 
     - ``None``         → ``[None]``  (use default_project or single-source)

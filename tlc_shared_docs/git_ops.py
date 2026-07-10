@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
-from typing import List
+from typing import Callable, List, Optional
 
 from git import Repo, GitCommandError
+
+logger = logging.getLogger(__name__)
 
 
 class GitError(RuntimeError):
@@ -165,7 +169,7 @@ def push_files(
     commit_message: str,
     force: bool = False,
     verbose: bool = False,
-    _print: object = None,
+    _print: Optional[Callable[[str], None]] = None,
 ) -> List[str]:
     """Clone *url*, write *file_map* ``{remote_path: content}``, commit, and
     push to *branch*.
@@ -263,6 +267,55 @@ def push_files(
         if repo is not None:
             repo.close()
         shutil.rmtree(clone_dir, ignore_errors=True)
+
+
+def check_ignored(root: Path, rel_paths: List[str]) -> dict[str, str]:
+    """Return ``{rel_path: ignore_source}`` for paths gitignored in *root*.
+
+    Runs ``git check-ignore --verbose`` so callers can see which ignore file
+    produced each match (and exempt specific sources if needed). Paths whose
+    only match is a negation pattern (``!pattern``) are not ignored and are
+    excluded from the result. Tracked files are never reported ignored —
+    check-ignore consults the index by default.
+
+    Best-effort guard: returns an empty dict when *root* is not a usable
+    git repository (e.g., a bare ``.git`` marker directory in tests).
+    """
+    if not rel_paths:
+        return {}
+    try:
+        repo = Repo(root)
+    except Exception as exc:
+        logger.warning("Not a git repository, skipping gitignore check: %s", exc)
+        return {}
+    try:
+        output = repo.git.check_ignore("-v", "--", *rel_paths)
+    except GitCommandError as exc:
+        # Exit status 1 means "none of the paths are ignored" — not an error
+        if exc.status != 1:
+            logger.warning("git check-ignore failed in %s: %s", root, exc)
+        return {}
+    finally:
+        repo.close()
+
+    # Each line is "<source>:<linenum>:<pattern>\t<path>". Split the path off
+    # at the tab, then take <source> as everything before the ":<digits>:"
+    # separator (the source may itself contain ':', e.g. a Windows drive path
+    # from core.excludesFile).
+    result: dict[str, str] = {}
+    for line in output.splitlines():
+        left, sep, path = line.partition("\t")
+        m = re.match(r"^(.*):\d+:(.*)$", left)
+        if not sep or not m:
+            continue
+        source, pattern = m.group(1), m.group(2)
+        if pattern.startswith("!"):
+            continue  # negation pattern: the path is NOT ignored
+        # git quotes paths containing special characters; unquote the common case
+        if path.startswith('"') and path.endswith('"'):
+            path = path[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+        result[path.replace("\\", "/")] = source.replace("\\", "/")
+    return result
 
 
 def fetch_single_file(url: str, branch: str, file_path: str) -> bytes | None:
